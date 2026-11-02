@@ -2268,7 +2268,8 @@ section[id] { scroll-margin-top: 16px; }
     <li>the Rotation and Position constraints;</li>
     <li>the quaternion and vector nodes;</li>
     <li>creating materials and material instances, and assigning slots;</li>
-    <li>adding morph curves and the Set Curve Value node for blendshapes.</li>
+    <li>adding morph curves and the Set Curve Value node for blendshapes;</li>
+    <li>importing an animation clip as an Anim Sequence and reading its bones frame by frame (<code>run_anim_import.py</code>).</li>
   </ul>
   <p>If one has a different name in Unreal 5.6, the log names it, and that part falls back without breaking the build.</p>
   <div class="box-note">
@@ -2280,7 +2281,7 @@ section[id] { scroll-margin-top: 16px; }
 <section class="feature" id="animation-export">
   <h2>Animation export (plan)</h2>
   <p class="lead">The next step: carry an animation from Maya to Unreal, not only the rig, so it plays the same and an animator can keep editing it in Sequencer.</p>
-  <div class="status"><span class="pill">Plan, 2026-11-02</span><span class="pill todo">Maya: not started</span><span class="pill todo">Unreal: not started</span></div>
+  <div class="status"><span class="pill">Plan, 2026-11-02</span><span class="pill ok">Maya: clip export built, tested on 5 clips</span><span class="pill todo">Unreal: clip import written, not run yet</span></div>
 
   <h3>What it is in Maya</h3>
   <div class="sol" style="border:0;padding-top:0">
@@ -2348,6 +2349,7 @@ section[id] { scroll-margin-top: 16px; }
         <li><b>a baked FBX</b>: the joints recorded on every frame. Unreal imports it as an Anim Sequence. It plays exactly but can't be edited on the controls. It is the <b>answer key</b>, and the fallback;</li>
         <li><b>a sidecar file</b> (<code>.anim.json</code>): for every control, its Maya keys and its position on every frame, plus every joint on every frame, in Unreal axes and centimetres.</li>
       </ul>
+      <p><b>Built.</b> The Animation tab (clip name, frame range, Export Clip) lists which controls are keyed, and flags channels that aren't a single curve (anim layers, constraints) and parents that move but aren't rebuilt (an animated <code>world_ctrl</code>). Tested on five script-made Murakami clips: every frame matches Maya exactly, and the curve rebuilt from the exported keys matches Maya's within 0.000002 between keys.</p>
     </div>
     <figure>
       <svg class="d" viewBox="0 0 520 210" role="img" aria-label="A Maya clip is exported as a baked FBX, which becomes an Anim Sequence in Unreal, and as an anim.json sidecar, which becomes keys on the Control Rig in a Level Sequence; the animation check compares both against Maya.">
@@ -2579,6 +2581,7 @@ section[id] { scroll-margin-top: 16px; }
 <footer>
   <p><b>Changelog</b></p>
   <ul>
+    <li>2026-11-02: animation clip export built in Maya (Animation tab, baked FBX + sidecar), tested on five script-made clips.</li>
     <li>2026-11-02: added "Animation export (plan)": the routes assessed, the recommended first steps, and how the result will be measured. Same day: split into two axes after a shared start (axis 1: retakes on the baked clip; axis 2: the animator's keys on the Control Rig, with an edit test), and the control-axes question got Murakami's numbers. Nothing built yet.</li>
     <li>2026-10-23: space switches driven by the controller's own channel are wired after the control is built; Murakami test setups (arm IK spaces, neck curl) in <code>tools/maya/murakami_feature_setup.py</code>.</li>
     <li>2026-10-22: all features covered: added pipeline and manifest, IK/FK limbs, spline IK, constraints and follow spaces, rest correction, blendshapes, pose check, graph layout, tagger tool. Page reordered from foundations to tools.</li>

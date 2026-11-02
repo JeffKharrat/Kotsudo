@@ -1,7 +1,8 @@
 # Animation export: assessment and plan
 
-Status: **plan only** (2026-11-02). No animation code exists yet. Updated the
-same day: the work is split into **two axes** that share one start
+Status (2026-11-02): **S0 built and tested** (Maya clip export, Animation
+tab, five script-made test clips). **S1 written, not yet run in Unreal**
+(`run_anim_import.py`). The work is split into **two axes** that share one start
 (section 5): **axis 1**, small retakes on the baked clip (route F), and
 **axis 2**, the whole animation as the animator's own keys on the Control Rig
 (route C), so an edit behaves as it would in Maya. This page
@@ -230,70 +231,119 @@ be worked on in parallel (separate branches).
 
 Next to the rig FBX, one pair per clip:
 
-* `<name>.<clip>.anim.fbx`: baked joints (route A). Root joint hierarchy,
-  plus the blendshape meshes if any, so morph curves come along.
-  `FBXExportBakeComplexAnimation -v true`, `...Start/End` = clip range,
-  `...Step 1`, skins/shapes as the rig export.
-* `<name>.<clip>.anim.json`: the sidecar (routes B and C, and the check).
+* `<base>.<clip>.anim.fbx`: route A. The same nodes as the rig FBX (root
+  joint hierarchy and visible meshes, through
+  `export_rig_manifest.export_skeleton_and_meshes_fbx`), baked on every frame
+  of the clip (`export_fbx(..., bake_range=(start, end))`), so morph curves
+  come along. Verified like the rig FBX (all manifest bones, no duplicates).
+* `<base>.<clip>.anim.json`: the sidecar (routes B, C and F, and the check).
+
+`<base>` is the rig FBX's name (the manifest's `poses_file` without
+`.poses.json`). Schema as built (S0, `export_animation.ANIM_SCHEMA_VERSION`
+= 1):
 
 ```jsonc
 {
   "schema": "kotsudo.anim", "schema_version": 1,
-  "rig_name": "murakami", "manifest_schema_version": 6, "clip": "walk",
-  "time": {"fps": 24.0, "maya_unit": "film", "start": 1, "end": 48},
-  "units": {"linear": "cm", "rotation": "quat_xyzw_world"},
-  "control_rest": { "...": "same as poses.json" },
-  "switches":     [ "...same as poses.json..." ],
+  "rig_name": "murakami", "manifest_schema_version": 6, "clip": "fk_body",
+  "source": {"scene": "...", "maya_version": "2026", "exported": "2026-11-02T10:45:00"},
+  "time": {"fps": 24.0, "maya_unit": "film", "start": 0.0, "end": 48.0, "step": 1.0,
+           "frames": [0.0, 1.0, "..."]},
+  "units": {"linear": "cm", "rotation": "quat_xyzw_world",
+            "channel_linear": "cm", "channel_angle": "deg", "slope": "value_per_frame"},
+  "control_rest": {"L_ArmFKctrl_01": {"t": [...], "q": [...], "o": [...]}},  // as poses.json
+  "switches": [{"module": "L_ArmLeaf", "control": "L_Arm_IKFK_Switch",
+                "attribute": "IK_FK", "ik": 0.0, "fk": 1.0}],
+  "switch_values": {"L_Arm_IKFK_Switch.IK_FK": [1.0, 1.0, "..."]},           // per frame
   "controls": {
     "L_ArmFKctrl_01": {
-      // Unreal-axes world state on every frame (route B, the check)
-      "samples": [[[x, y, z], [qx, qy, qz, qw]], "..."],
-      // the Maya keys of time-driven curves (route C); absent if layered
-      "keys": {
+      "dag_path": "|...|L_ArmFKctrl_01", "rotate_order": 0,
+      "samples": [[[x, y, z], [qx, qy, qz, qw]], "..."],   // world state per frame (Unreal axes)
+      "parents_animated": ["world_ctrl"],                 // only when a non-control parent moves
+      "channels": {
         "rotateX": {
-          "unit": "deg", "weighted": false, "infinity": ["constant", "constant"],
-          "keys": [[1.0, 0.0, "auto", "auto", 0.0, 0.0, 1.0, 1.0], "..."]
-          //        time, value, in type, out type, in angle, out angle, in weight, out weight
+          "source": "keys",            // static | keys | driven_keys | layered | constrained | blended | connected
+          "values": [0.0, 1.2, "..."], // channel value per frame (cm / deg / plain)
+          // when source == "keys":
+          "curve": "L_ArmFKctrl_01_rotateX", "type": "animCurveTA", "weighted": false,
+          "infinity": ["constant", "constant"],
+          "key_fields": ["frame", "value", "in_type", "out_type", "in_slope", "out_slope",
+                         "in_weight", "out_weight"],
+          "keys": [[0.0, 0.0, "auto", "auto", 0.0, 1.8, 1.0, 1.0], "..."],
+          "maya_angles": [[0.0, 12.4], "..."], "locked": [true, "..."]
         }
-      },
-      "source": "keys"   // or "layered", "constrained", "parent_animated"
+      }
     }
   },
-  "channels": {
-    "L_Arm_Switch.IK_FK": {"samples": [1.0, 1.0, 0.0, "..."], "keys": {"...": "..."}}
-  },
-  "blendshapes": {"Head_BS_Smile": [0.0, 0.1, "..."]},
-  "joints": {"L_ArmLeaf1": [[[x, y, z], [qx, qy, qz, qw]], "..."]}
+  "blendshapes": {"Head_BS_Smile": [0.0, 0.1, "..."]},   // weight per frame
+  "joints": {"L_ArmLeaf1": [[[x, y, z], [qx, qy, qz, qw]], "..."]},
+  "notes": ["world_ctrl is animated but not an exported control; ..."],
+  "fbx_file": "murakami.fk_body.anim.fbx"
 }
 ```
 
-Size for Murakami (≈ 40 controls, ≈ 100 joints, 240 frames): ≈ 2–3 MB.
+**Slopes** are measured on the curve Maya evaluates (one-sided Richardson
+differences at each key, in value per frame), so they are right whatever the
+tangent type (auto, spline, clamped, flat, linear, fixed). On the test clips,
+a cubic Hermite rebuilt from the exported keys and slopes matches Maya's
+curve to 0.000002 between keys (unweighted curves). Weighted curves also
+need the weights; their conversion is part of 2a.
+
+Size for Murakami (49 controls, 97 joints, 49 frames): ≈ 0.65 MB of
+sidecar, 2.1 MB of baked FBX (the meshes are included).
 
 ## 8. Maya side
 
-New module `tools/maya/export_animation.py`, and an **Animation** tab in the
-tagger tool (clip name, frame range defaulting to the timeline, "baked FBX"
-and "controller keys" checkboxes, Export).
+Built (S0): `tools/maya/export_animation.py` and the **Animation** tab of the
+tagger tool (clip name, frame range with "Use Timeline", "Baked FBX"
+checkbox, Scan Keys, Export Clip). Script use:
+`export_animation.export_clip_from_scene("walk", 0, 48)`.
 
-1. Read the manifest from the root joint (as `export_from_scene()` does).
-2. Controls = `manifest_controls()`; switches = `switches()`.
-3. For each control channel, follow its input: one `animCurveT*` gives keys
-   (`keyframe -q -timeChange -valueChange`, `keyTangent -q` for types,
-   angles, weights, `weightedTangents`); an anim-layer blend node, constraint
-   or pair blend marks it per-frame only.
-4. Step the timeline over the range (`currentTime`, refresh suspended) and
-   capture with `world_state()` / `_switch_channels()` / blendshape weights /
-   every exported joint, exactly as a pose capture.
-5. Restore the current time. Write the json, then the baked FBX.
+1. Read the manifest from the root joint.
+2. Controls = `etp.manifest_controls()`; switches = `etp.switches()`.
+3. `scan_animation()`: for each control channel, follow its input. One
+   `animCurveT*` gives keys (`read_curve`); `animCurveU*` is a driven key
+   (rig behaviour, left alone); an anim-layer blend node, constraint, pair
+   blend or other connection marks the channel per-frame only. Transforms
+   above a control that are animated but not controls themselves (an
+   animated `world_ctrl`) are reported on each control they move.
+4. `control_rest()`: the pose check's rest, taken with every control channel
+   and every animated parent at its default (keyed channels are set,
+   captured and restored without changing time).
+5. Step the timeline over the range (`currentTime`, refresh suspended) and
+   capture with `world_state()`, channel values, switch values, blendshape
+   weights and every exported joint, exactly as a pose capture.
+6. Restore the current time. Write the baked FBX, then the json.
 
-Offline test: a synthetic scene with keys, layers and a driven key; check
-that keys are read only from `animCurveT*`, and that frame N of the sidecar
-equals a pose capture at frame N.
+Test clips: `tools/maya/test_animations.py` (seeded): `fk_body`,
+`ikfk_switch`, `spine`, `world` (animated world_ctrl), `stress` (360° spin,
+sub-frame key, zxy rotate order, weighted and stepped tangents, an anim
+layer, a keyed slider).
+
+Tests (mayapy, on a Murakami scene copy):
+`tests/maya_anim_export_test.py` (all five clips: rest, per-frame samples
+against a fresh capture, keys and curve rebuild, channel sources, baked FBX)
+and `tests/maya_tool_ui_test.py` (the Animation tab: scan, export).
 
 ## 9. Unreal side
 
-New module `rig_builder/anim_import.py` and entry script
-`run_anim_import.py` (same reload pattern as `run_rig_builder.py`).
+**S1 as written** (`rig_builder/anim_import.py`, entry `run_anim_import.py`,
+same reload pattern as `run_rig_builder.py`; not yet run):
+
+* finds the clip (`CLIP_NAME`, else the newest `*.anim.json` next to the
+  rig FBX or in the repo's `FBXs`);
+* imports its baked FBX as an Anim Sequence in `/Game/RigBuilder/Anims` on
+  the open rig's skeleton, with the classic FBX importer (the
+  `Interchange.FeatureFlags.Import.FBX` switch is turned off for the import
+  and restored: Interchange ignores the classic animation-only options);
+* reads every bone on every frame (`AnimPoseExtensions.get_anim_pose_at_frame`,
+  `get_bone_pose(..., WORLD)`) and compares it with the sidecar's Maya
+  joints: motion since the first frame, position (cm) and rotation (deg),
+  per module with T0/T1 tiers, plus the first frame's positions as a
+  calibration. Log: a `VERDICT (baked clip)` line and the worst joints.
+  Report: `<base>.<clip>.anim_check.json` next to the sidecar.
+
+The steps below are the plan for the later phases.
 The functions below exist in the 5.6 headers (`ControlRigSequencerEditorLibrary.h`,
 Python name `unreal.ControlRigSequencerLibrary`); they still need a first run.
 
@@ -392,8 +442,8 @@ Later, at least one clip made by an animator, not by a script.
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **S0** Maya clip export | `export_animation.py`, Animation tab, baked FBX + sidecar (with sparse keys and tangents), offline test | sidecar frame N = pose capture at frame N; keys read only from `animCurveT*` |
-| **S1** Unreal baseline | baked FBX → Anim Sequence in a Level Sequence; animation check on it | measuring stick ≈ 0 |
+| **S0** ✅ Maya clip export | `export_animation.py`, Animation tab, baked FBX + sidecar (with sparse keys and tangents), Maya test | sidecar frame N = pose capture at frame N; keys read only from `animCurveT*` (passed on 5 clips) |
+| **S1** Unreal baseline (written) | `run_anim_import.py`: baked FBX → Anim Sequence; measuring stick on it. The Level Sequence comes with 1a | measuring stick ≈ 0 (T0) |
 
 **Axis 1: retakes on the baked clip**
 
