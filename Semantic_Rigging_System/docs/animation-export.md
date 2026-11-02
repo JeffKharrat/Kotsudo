@@ -9,9 +9,21 @@ motion length ratio 1.000002); `world` T1 (0.036 cm, legs only). Cause
 narrowed down: the leg bones of the `world` clip start 0.025 cm off at
 frame 0 and the character's 90° turn swings that offset (√2 × 0.025).
 The baked FBX itself is exact (re-imported in Maya: 0.0001 cm on every
-bone), so Unreal's import adds it. Suspect: the importer's default
-rebuild of local transforms from global ones (`SkeletalMeshEdit.cpp`,
-`bPreserveLocalTransform` off). Next run imports each clip both ways. The work is split into **two axes** that share one start
+bone, every joint carries curves), so Unreal adds it. **Found (third
+run):** the offsets equal Maya's rest-to-bind distances on those bones
+(`LegLeaf2` 0.0136 cm, `LegLeaf3` 0.024 cm, from the manifest's
+`rest_pose`). In the `world` clip the legs don't move relative to their
+parents, and for such still bones Unreal plays the skeleton's reference
+pose, which is the skin's bind pose, instead of the clip's values, when
+the two are within a small tolerance. The toes (1.01 cm from bind) keep
+their clip values. "Preserve Local Transform" changes nothing (identical
+verdicts both ways). Consequence: on Murakami, a baked clip can show
+still bones up to ≈ 0.025 cm from Maya's rest pose. The measuring stick
+is therefore T0 when the bones move, and T1 (≤ 0.036 cm) when a still
+offset is swung by the whole character turning. Possible fix later:
+export the rig's skeleton at the rest pose instead of the bind pose
+(`_restore_bind_pose`), which would change what the rest correction
+does, so it is left as a recorded limit for now. The work is split into **two axes** that share one start
 (section 5): **axis 1**, small retakes on the baked clip (route F), and
 **axis 2**, the whole animation as the animator's own keys on the Control Rig
 (route C), so an edit behaves as it would in Maya. This page

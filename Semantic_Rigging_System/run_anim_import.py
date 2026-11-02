@@ -33,8 +33,9 @@ CLIP_NAME = None            # with ALL_CLIPS = False: None = the newest clip; el
 CLIP_PATH = None            # or a full path to a <base>.<clip>.anim.json
 # Import mode of the bone tracks: False = Unreal's default (local recomputed
 # from global transforms), True = the FBX local transforms as they are,
-# None = import both, report both verdicts (experiment, 2026-11-02).
-PRESERVE_LOCAL_TRANSFORM = None
+# None = import both, report both verdicts. Tested 2026-11-02 on two clips:
+# identical results, so the default is kept.
+PRESERVE_LOCAL_TRANSFORM = False
 
 
 def main():
