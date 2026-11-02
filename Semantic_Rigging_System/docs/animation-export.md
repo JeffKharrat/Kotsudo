@@ -3,11 +3,15 @@
 Status (2026-11-02): **S0 built and tested** (Maya clip export, Animation
 tab, five script-made test clips). **S1 first Unreal run**: the `world`
 clip imported and checked, all 97 bones within T1 on all 49 frames (worst
-0.049 cm / 0.004°). Two findings fixed since: the import also built a
-skeletal mesh, and helper chains were scored. Open: rebuilt joints drift
-up to 0.036 cm in proportion to how far they have moved (≈ 0.08 %); the
-next run records motion vectors to tell scale from offset, and compares
-with `fk_body` (no world motion). The work is split into **two axes** that share one start
+0.049 cm / 0.004°). Fixed since: the import also built a skeletal mesh,
+and helper chains were scored. Second run: `fk_body` **T0** (0.0011 cm,
+motion length ratio 1.000002); `world` T1 (0.036 cm, legs only). Cause
+narrowed down: the leg bones of the `world` clip start 0.025 cm off at
+frame 0 and the character's 90° turn swings that offset (√2 × 0.025).
+The baked FBX itself is exact (re-imported in Maya: 0.0001 cm on every
+bone), so Unreal's import adds it. Suspect: the importer's default
+rebuild of local transforms from global ones (`SkeletalMeshEdit.cpp`,
+`bPreserveLocalTransform` off). Next run imports each clip both ways. The work is split into **two axes** that share one start
 (section 5): **axis 1**, small retakes on the baked clip (route F), and
 **axis 2**, the whole animation as the animator's own keys on the Control Rig
 (route C), so an edit behaves as it would in Maya. This page

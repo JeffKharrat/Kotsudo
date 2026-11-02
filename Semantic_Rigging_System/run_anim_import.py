@@ -31,6 +31,10 @@ SOURCE_ASSET_PATH = None    # None = derived from the rig's preview mesh, as in 
 ALL_CLIPS = True            # True = every *.anim.json next to the rig FBX (or in the repo's FBXs)
 CLIP_NAME = None            # with ALL_CLIPS = False: None = the newest clip; else e.g. "fk_body"
 CLIP_PATH = None            # or a full path to a <base>.<clip>.anim.json
+# Import mode of the bone tracks: False = Unreal's default (local recomputed
+# from global transforms), True = the FBX local transforms as they are,
+# None = import both, report both verdicts (experiment, 2026-11-02).
+PRESERVE_LOCAL_TRANSFORM = None
 
 
 def main():
@@ -74,11 +78,17 @@ def main():
             unreal.log_warning(f"[AnimImport] {os.path.basename(clip_path)}: no baked FBX beside it, skipped "
                                "(re-export the clip with 'Baked FBX' ticked).")
             continue
-        anim = anim_import.import_baked_clip(os.path.join(folder, fbx_name), skeleton)
-        report_path = clip_path.replace(".anim.json", ".anim_check.json")
-        report = anim_import.check_anim_sequence(anim, document, manifest, report_path,
-                                                 label=f"baked {document.get('clip')}")
-        verdicts.append(report["verdict"])
+        modes = (False, True) if PRESERVE_LOCAL_TRANSFORM is None else (bool(PRESERVE_LOCAL_TRANSFORM),)
+        for preserve in modes:
+            suffix = "_local" if preserve else ""
+            base = "A_" + fbx_name.replace(".anim.fbx", "").replace(".", "_")
+            anim = anim_import.import_baked_clip(os.path.join(folder, fbx_name), skeleton,
+                                                 asset_name=base + suffix, preserve_local_transform=preserve)
+            report_path = clip_path.replace(".anim.json", f".anim_check{suffix}.json")
+            mode = "FBX local transforms" if preserve else "Unreal default import"
+            report = anim_import.check_anim_sequence(anim, document, manifest, report_path,
+                                                     label=f"baked {document.get('clip')}, {mode}")
+            verdicts.append(report["verdict"])
     for verdict in verdicts:
         unreal.log(f"[AnimImport] {verdict}")
 

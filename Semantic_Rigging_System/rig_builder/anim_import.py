@@ -89,12 +89,18 @@ def _set_cvar(name, value):
     unreal.SystemLibrary.execute_console_command(None, f"{name} {int(value)}")
 
 
-def import_baked_clip(fbx_path, skeleton, destination=ANIM_FOLDER, asset_name=None):
+def import_baked_clip(fbx_path, skeleton, destination=ANIM_FOLDER, asset_name=None,
+                      preserve_local_transform=False):
     """Import ``fbx_path`` as an Anim Sequence on ``skeleton``; returns it.
 
     Uses the classic FBX importer, whose animation-only options Unreal 5.6
     honours (its Interchange importer ignores the classic options, as found
     with the shape meshes); the Interchange switch is restored afterwards.
+
+    ``preserve_local_transform``: take each bone's local transform from the
+    FBX as is, instead of Unreal's default (local = global x parent global^-1,
+    recomputed per frame). Under test: the default added a 0.025 cm leg
+    offset on the clip where world_ctrl moves (docs/animation-export.md).
     """
     asset_name = asset_name or "A_" + os.path.basename(fbx_path).replace(".anim.fbx", "").replace(".", "_")
     remove_extra_imports(destination, asset_name, protect=skeleton)
@@ -119,7 +125,8 @@ def import_baked_clip(fbx_path, skeleton, destination=ANIM_FOLDER, asset_name=No
         data.set_editor_property("animation_length", unreal.FBXAnimationLengthImportType.FBXALIT_EXPORTED_TIME)
         data.set_editor_property("import_bone_tracks", True)
         for name, value in (("import_custom_attribute", True), ("remove_redundant_keys", False),
-                            ("use_default_sample_rate", False)):
+                            ("use_default_sample_rate", False),
+                            ("preserve_local_transform", bool(preserve_local_transform))):
             try:
                 data.set_editor_property(name, value)
             except Exception:
@@ -319,8 +326,9 @@ def check_anim_sequence(anim, document, manifest=None, report_path=None, label="
         _warn(f"Frame count differs: sidecar {len(frames)}, Anim Sequence {report['frames']['anim_sequence']}.")
     if missing:
         _warn(f"{len(missing)} Maya joint(s) not in the Anim Sequence: {missing[:6]}")
-    if calibration and calibration[0][1] > 0.1:
-        _warn(f"First frame: bones away from their Maya position (cm): {report['calibration_first_frame_cm'][:3]}")
+    if calibration:
+        (_warn if calibration[0][1] > 0.1 else _log)(
+            f"  first frame, bones farthest from their Maya position (cm): {report['calibration_first_frame_cm'][:3]}")
     for name, p, r, frame in report["worst_joints"][:5]:
         diag = per_joint[name].get("at_worst_frame") or {}
         _log(f"  {name}: {p} cm / {r} deg (frame {frame}; motion length ratio "
