@@ -28,7 +28,8 @@ from rig_builder.metadata_reader import get_asset_metadata, read_manifest_docume
 
 CONTROL_RIG_PATH = None     # None = the open Control Rig
 SOURCE_ASSET_PATH = None    # None = derived from the rig's preview mesh, as in run_rig_builder
-CLIP_NAME = None            # None = the newest *.anim.json next to the rig FBX; else e.g. "fk_body"
+ALL_CLIPS = True            # True = every *.anim.json next to the rig FBX (or in the repo's FBXs)
+CLIP_NAME = None            # with ALL_CLIPS = False: None = the newest clip; else e.g. "fk_body"
 CLIP_PATH = None            # or a full path to a <base>.<clip>.anim.json
 
 
@@ -54,19 +55,32 @@ def main():
         manifest, _notes = manifest_schema.migrate(manifest)
 
     assets = [mesh, skeleton, rig.get_preview_mesh() if hasattr(rig, "get_preview_mesh") else None]
-    clip_path = CLIP_PATH or anim_import.find_clip(assets, CLIP_NAME)
-    if not clip_path:
+    if CLIP_PATH:
+        clip_paths = [CLIP_PATH]
+    elif ALL_CLIPS:
+        clip_paths = anim_import.find_all_clips(assets)
+    else:
+        clip_paths = [p for p in [anim_import.find_clip(assets, CLIP_NAME)] if p]
+    if not clip_paths:
         raise RuntimeError("No <base>.<clip>.anim.json found next to the rig FBX or in the repo's FBXs "
                            "folder. Export a clip from Maya (Animation tab), or set CLIP_PATH.")
-    document = anim_import.load_clip(clip_path)
-    folder = os.path.dirname(clip_path)
-    fbx_name = document.get("fbx_file")
-    if not fbx_name or not os.path.isfile(os.path.join(folder, fbx_name)):
-        raise RuntimeError(f"{clip_path}: no baked FBX beside it. Re-export the clip with 'Baked FBX' ticked.")
 
-    anim = anim_import.import_baked_clip(os.path.join(folder, fbx_name), skeleton)
-    report_path = clip_path.replace(".anim.json", ".anim_check.json")
-    anim_import.check_anim_sequence(anim, document, manifest, report_path)
+    verdicts = []
+    for clip_path in clip_paths:
+        document = anim_import.load_clip(clip_path)
+        folder = os.path.dirname(clip_path)
+        fbx_name = document.get("fbx_file")
+        if not fbx_name or not os.path.isfile(os.path.join(folder, fbx_name)):
+            unreal.log_warning(f"[AnimImport] {os.path.basename(clip_path)}: no baked FBX beside it, skipped "
+                               "(re-export the clip with 'Baked FBX' ticked).")
+            continue
+        anim = anim_import.import_baked_clip(os.path.join(folder, fbx_name), skeleton)
+        report_path = clip_path.replace(".anim.json", ".anim_check.json")
+        report = anim_import.check_anim_sequence(anim, document, manifest, report_path,
+                                                 label=f"baked {document.get('clip')}")
+        verdicts.append(report["verdict"])
+    for verdict in verdicts:
+        unreal.log(f"[AnimImport] {verdict}")
 
 
 if __name__ == "__main__":
