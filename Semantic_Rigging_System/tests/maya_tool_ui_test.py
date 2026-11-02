@@ -34,7 +34,7 @@ for blendshape in cmds.ls(type="blendShape"):
 
 window = rig_tagger_tool.RigTaggerWindow()
 tabs = [window._tabs.tabText(i) for i in range(window._tabs.count())]
-assert tabs == ["Modules", "Blendshapes", "Checks"], tabs
+assert tabs == ["Modules", "Blendshapes", "Animation", "Checks"], tabs
 assert window._module_tree.topLevelItemCount() > 0, "modules tab is empty"
 tree = window._bs_tree
 nodes = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
@@ -141,6 +141,26 @@ erm.export(folder, "uitest", "murakami", rig_tagger_tool.read_all_tagged_modules
 summary_text = window._export_summary_text(0)
 print("UI export summary:", summary_text.replace(chr(10), " | "))
 assert "Test poses for the Unreal pose check:" in summary_text and "Controller shapes:" in summary_text
+
+# --- 10: Animation tab: scan the keys, export a clip through the tab ----------
+import test_animations  # noqa: E402
+test_animations.make_clip("fk_body")
+window._tabs.setCurrentIndex(tabs.index("Animation"))      # switching tabs scans
+app.processEvents()
+rows = window._anim_tree.topLevelItemCount()
+print("UI animation:", rows, "row(s) |", window._anim_summary.text())
+assert rows >= 20 and "keyed control(s)" in window._anim_summary.text()
+assert "uitest.clip" in window._clip_target_label.text() or "uitest." in window._clip_target_label.text()
+window._clip_name_field.setText("ui clip")
+window._clip_start.setValue(0)
+window._clip_end.setValue(12)
+window._clip_bake_check.setChecked(False)
+clip_summary = window._run_clip_export()
+print("UI clip export:", window._clip_summary_text(clip_summary).replace(chr(10), " | "))
+assert os.path.basename(clip_summary["json"]) == "uitest.ui_clip.anim.json", clip_summary["json"]
+assert clip_summary["frames"] == 13 and clip_summary["keyed_channels"] > 0
+test_animations.clear_animation()
+cmds.optionVar(remove="kotsudoClipName")
 
 # --- 8: export fields remembered ---------------------------------------------
 second = rig_tagger_tool.RigTaggerWindow()
