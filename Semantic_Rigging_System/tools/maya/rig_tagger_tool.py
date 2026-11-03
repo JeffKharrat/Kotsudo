@@ -34,6 +34,7 @@ except ImportError:
     from shiboken2 import wrapInstance
 
 import export_rig_manifest as erm
+import export_animation as ea
 
 try:
     USER_ROLE = QtCore.Qt.UserRole
@@ -582,6 +583,7 @@ class RigTaggerWindow(QtWidgets.QDialog):
         self._modules_layout = main_layout
         self._tabs.addTab(modules_page, "Modules")
         self._tabs.addTab(self._build_blendshape_page(), "Blendshapes")
+        self._tabs.addTab(self._build_animation_page(), "Animation")
         self._checks_page = self._build_checks_page()
         self._tabs.addTab(self._checks_page, "Checks")
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -1196,9 +1198,191 @@ class RigTaggerWindow(QtWidgets.QDialog):
         layout.addLayout(buttons)
         return page
 
+    # ------------------------------------------------------------------
+    # Animation tab
+    # ------------------------------------------------------------------
+
+    def _build_animation_page(self):
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(7)
+
+        intro = QtWidgets.QLabel(
+            "Export an animation clip for Unreal: a baked FBX (plays exactly, and is the clip retakes "
+            "are made on) and a sidecar with the animator's keys and every frame. Files go next to the "
+            "rig FBX (Export Dir, Modules tab). Export the rig first: the clip uses its manifest."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QtWidgets.QFormLayout()
+        name = cmds.optionVar(query="kotsudoClipName") if cmds.optionVar(exists="kotsudoClipName") else "clip"
+        self._clip_name_field = QtWidgets.QLineEdit(name)
+        self._clip_name_field.editingFinished.connect(self._update_clip_target)
+        form.addRow("Clip Name:", self._clip_name_field)
+
+        range_row = QtWidgets.QHBoxLayout()
+        self._clip_start = QtWidgets.QSpinBox()
+        self._clip_end = QtWidgets.QSpinBox()
+        for spin in (self._clip_start, self._clip_end):
+            spin.setRange(-100000, 100000)
+        range_row.addWidget(QtWidgets.QLabel("Start"))
+        range_row.addWidget(self._clip_start)
+        range_row.addWidget(QtWidgets.QLabel("End"))
+        range_row.addWidget(self._clip_end)
+        timeline_btn = QtWidgets.QPushButton("Use Timeline")
+        timeline_btn.clicked.connect(self._use_timeline_range)
+        range_row.addWidget(timeline_btn)
+        range_row.addStretch(1)
+        form.addRow("Frames:", range_row)
+
+        self._clip_bake_check = QtWidgets.QCheckBox("Baked FBX (exact playback in Unreal)")
+        self._clip_bake_check.setChecked(True)
+        form.addRow("", self._clip_bake_check)
+        self._clip_target_label = QtWidgets.QLabel("")
+        self._clip_target_label.setWordWrap(True)
+        form.addRow("Writes:", self._clip_target_label)
+        layout.addLayout(form)
+
+        self._anim_tree = QtWidgets.QTreeWidget()
+        self._anim_tree.setColumnCount(4)
+        self._anim_tree.setHeaderLabels(["Control", "Keyed channels", "Keys", "Notes"])
+        self._anim_tree.setAlternatingRowColors(True)
+        self._anim_tree.setUniformRowHeights(True)
+        self._anim_tree.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._anim_tree.itemDoubleClicked.connect(self._select_anim_control)
+        layout.addWidget(self._anim_tree, 1)
+
+        self._anim_summary = QtWidgets.QLabel("")
+        self._anim_summary.setWordWrap(True)
+        layout.addWidget(self._anim_summary)
+
+        buttons = QtWidgets.QHBoxLayout()
+        for text, callback in (("Scan Keys", self.refresh_animation),
+                               ("Select Control", self._select_anim_control),
+                               ("Export Clip", self._export_clip)):
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(callback)
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        self._use_timeline_range()
+        return page
+
+    def _use_timeline_range(self):
+        start, end = ea.playback_range()
+        self._clip_start.setValue(int(round(start)))
+        self._clip_end.setValue(int(round(end)))
+
+    def _clip_export_dir(self):
+        field = getattr(self, "_export_dir_field", None)
+        text = field.text().strip() if field is not None else ""
+        return text or ea.default_export_dir()
+
+    def _update_clip_target(self, manifest=None):
+        try:
+            manifest = manifest or ea.manifest_from_scene()
+            clip = ea.sanitize_clip_name(self._clip_name_field.text())
+            text = "{}.{}.anim.json / .fbx in {}".format(ea.rig_base_name(manifest), clip, self._clip_export_dir())
+        except Exception as exc:
+            text = str(exc)
+        self._clip_target_label.setText(text)
+
+    def refresh_animation(self):
+        """List the controls whose channels are keyed or moved by something else."""
+        if not hasattr(self, "_anim_tree"):
+            return
+        self._anim_tree.clear()
+        try:
+            manifest = ea.manifest_from_scene()
+        except Exception as exc:
+            self._anim_summary.setText(str(exc))
+            self._clip_target_label.setText("")
+            return
+        self._update_clip_target(manifest)
+        try:
+            import export_test_poses as etp
+            controls = etp.manifest_controls(manifest)
+            scan = ea.scan_animation(manifest, controls)
+        except Exception as exc:
+            self._anim_summary.setText("Scan failed: {}".format(exc))
+            return
+        keyed_controls = keyed_channels = total_keys = 0
+        for name, plan in sorted(scan["channels"].items()):
+            keyed, keys, notes = [], 0, []
+            for attribute, _, record in plan:
+                if record["source"] == "keys":
+                    keyed.append(attribute)
+                    keys += int(cmds.keyframe(record["curve"], query=True, keyframeCount=True) or 0)
+                elif record["source"] not in ("static", "driven_keys"):
+                    notes.append("{}: {}".format(attribute, record["source"]))
+            parents = scan["parents_animated"].get(name)
+            if parents:
+                notes.append("moved by " + ", ".join(erm._short_node_name(p) for p in parents))
+            if not keyed and not notes:
+                continue
+            item = QtWidgets.QTreeWidgetItem([name, ", ".join(keyed), str(keys) if keys else "", "; ".join(notes)])
+            item.setData(0, USER_ROLE, controls.get(name))
+            self._anim_tree.addTopLevelItem(item)
+            if keyed:
+                keyed_controls += 1
+                keyed_channels += len(keyed)
+                total_keys += keys
+        for column in range(4):
+            self._anim_tree.resizeColumnToContents(column)
+        text = "{} keyed control(s), {} channel(s), {} key(s) on {} control(s) in the manifest.".format(
+            keyed_controls, keyed_channels, total_keys, len(controls))
+        if scan["animated_parents"]:
+            text += " Animated parents not rebuilt in Unreal: {} (their motion travels in the " \
+                    "per-frame samples).".format(", ".join(erm._short_node_name(p) for p in scan["animated_parents"]))
+        if not keyed_controls:
+            text = "No keys on the rig's controls. " + text
+        self._anim_summary.setText(text)
+
+    def _select_anim_control(self, *args):
+        item = self._anim_tree.currentItem()
+        node = item.data(0, USER_ROLE) if item else None
+        if node and cmds.objExists(node):
+            cmds.select(node, replace=True)
+
+    def _run_clip_export(self):
+        """Export the clip from the tab's fields; returns export_animation's summary."""
+        clip = ea.sanitize_clip_name(self._clip_name_field.text())
+        cmds.optionVar(stringValue=("kotsudoClipName", clip))
+        return ea.export_clip(ea.manifest_from_scene(), self._clip_export_dir(), clip,
+                              float(self._clip_start.value()), float(self._clip_end.value()),
+                              bake_fbx=self._clip_bake_check.isChecked())
+
+    def _export_clip(self):
+        try:
+            summary = self._run_clip_export()
+        except Exception as exc:
+            self._warn("Clip export failed: {}".format(exc))
+            return
+        self.refresh_animation()
+        QtWidgets.QMessageBox.information(self, "Clip Exported", self._clip_summary_text(summary))
+
+    @staticmethod
+    def _clip_summary_text(summary):
+        lines = ["Frames {:g}-{:g} ({} at {:g} fps)".format(summary["range"][0], summary["range"][1],
+                                                         summary["frames"], summary["fps"]),
+                 "Keyed: {} channel(s) on {} control(s), {} key(s)".format(
+                     summary["keyed_channels"], summary["keyed_controls"], summary["keys"]),
+                 "Sidecar: {}".format(summary["json"])]
+        if summary.get("fbx"):
+            lines.append("Baked FBX: {}".format(summary["fbx"]))
+        if summary.get("notes"):
+            lines.append("")
+            lines.append("Notes:")
+            lines.extend("  " + note for note in summary["notes"][:12])
+        return "\n".join(lines)
+
     def _on_tab_changed(self, index):
         if self._tabs.tabText(index) == "Blendshapes":
             self.refresh_blendshapes()
+        elif self._tabs.tabText(index) == "Animation":
+            self.refresh_animation()
 
     def refresh_blendshapes(self):
         if not hasattr(self, "_bs_tree"):

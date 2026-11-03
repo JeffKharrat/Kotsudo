@@ -4,7 +4,9 @@
   Maintenance memo (for Claude and anyone editing this page)
   - Source of truth: docs/explainer/kotsudo-explained.html in the repo. It is also published as a claude.ai artifact.
   - When a feature changes, update its section here in the same change, then republish.
-  - Section order: idea, pipeline, modules (IK/FK, spline, constraints, rest), drivers and extras, checking and tools.
+  - Section order: idea, pipeline, modules (IK/FK, spline, constraints, rest), drivers and extras, checking and tools, then plans ("Next").
+  - A plan section keeps the five parts, with "How we will solve it" / "How we will know it works"; rewrite it as a normal section once built.
+    Engineering detail for the animation plan: docs/animation-export.md.
   - Every feature keeps the same five parts: What it is in Maya / The challenges / How we solved it
     (each solution with a visual beside it) / How we know it works / Limits.
   - Colour code used by every figure: teal = Maya side, amber = Unreal side, red = a problem or an old behaviour.
@@ -249,6 +251,10 @@ section[id] { scroll-margin-top: 16px; }
     <li><a href="#graph-layout">Graph layout</a></li>
     <li><a href="#tagger-tool">Tagger tool and Checks</a></li>
     <li><a href="#unreal-todo">Not yet run in Unreal</a></li>
+  </ol>
+  <h2>Next</h2>
+  <ol>
+    <li><a href="#animation-export">Animation export (plan)</a></li>
   </ol>
 </nav>
 
@@ -1346,6 +1352,7 @@ section[id] { scroll-margin-top: 16px; }
         <li>weights computed live from the enum channel with the shared float nodes. Comparisons use Unreal's compare and select nodes, with a pure-arithmetic fallback.</li>
       </ul>
       <p>Because each null already sits at its measured pose, each space keeps its own offset. That answers challenge 4.</p>
+      <p>The usual setup puts the "Space" enum on the controller itself, but the space null is built before that controller exists. Those weights are therefore wired as soon as the module has created the control and its channels. The channel readers and maths nodes don't depend on execution order, so wiring them late is safe.</p>
     </div>
     <figure>
       <svg class="d" viewBox="0 0 520 240" role="img" aria-label="Unreal: three space nulls, one per target, feed a Parent Constraint; its weights come from the Space channel through float maths; the constraint sets hand_ctrl's parent.">
@@ -2261,7 +2268,8 @@ section[id] { scroll-margin-top: 16px; }
     <li>the Rotation and Position constraints;</li>
     <li>the quaternion and vector nodes;</li>
     <li>creating materials and material instances, and assigning slots;</li>
-    <li>adding morph curves and the Set Curve Value node for blendshapes.</li>
+    <li>adding morph curves and the Set Curve Value node for blendshapes;</li>
+    <li>importing an animation clip as an Anim Sequence and reading its bones frame by frame (<code>run_anim_import.py</code>).</li>
   </ul>
   <p>If one has a different name in Unreal 5.6, the log names it, and that part falls back without breaking the build.</p>
   <div class="box-note">
@@ -2269,9 +2277,313 @@ section[id] { scroll-margin-top: 16px; }
   </div>
 </section>
 
+<!-- ============================================================ ANIMATION EXPORT (PLAN) -->
+<section class="feature" id="animation-export">
+  <h2>Animation export (plan)</h2>
+  <p class="lead">The next step: carry an animation from Maya to Unreal, not only the rig, so it plays the same and an animator can keep editing it in Sequencer.</p>
+  <div class="status"><span class="pill">Plan, 2026-11-02</span><span class="pill ok">Maya: clip export built, tested on 5 clips</span><span class="pill todo">Unreal: clip import written, not run yet</span></div>
+
+  <h3>What it is in Maya</h3>
+  <div class="sol" style="border:0;padding-top:0">
+    <div>
+      <p>The animator sets <b>keys</b> on the controls: "at frame 12, this channel is 35°". Between keys, Maya draws a smooth <b>curve</b>, shaped by each key's <b>tangents</b> (the handles in the Graph Editor). Every keyable channel can have its own curve: rotations, translations, the <code>IK_FK</code> switch, a space enum, the face sliders.</p>
+      <p>"Exporting the animation" can mean three things, from easy to hard:</p>
+      <div class="scroll">
+      <table class="t">
+        <thead><tr><th>Level</th><th>Question</th><th>Who cares</th></tr></thead>
+        <tbody>
+          <tr><td><b>Playback</b></td><td>Does the character move the same on every frame?</td><td>the viewer</td></tr>
+          <tr><td><b>Editable</b></td><td>Are the keys on the Unreal controls, so the motion can be changed in Sequencer?</td><td>the animator</td></tr>
+          <tr><td><b>Same curves</b></td><td>Are they the animator's own keys, at the same frames, with the same shapes?</td><td>the animator, strictly</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 220" role="img" aria-label="A Maya Graph Editor curve for L_ArmFKctrl_01.rotateX over 48 frames, with five keys and their tangent handles.">
+        <line class="lg" x1="50" y1="140" x2="500" y2="140"/>
+        <line class="ln" x1="50" y1="190" x2="500" y2="190"/><line class="ln" x1="50" y1="190" x2="50" y2="20"/>
+        <text x="44" y="144" text-anchor="end" class="s">0°</text>
+        <text x="44" y="38" text-anchor="end" class="s">40°</text>
+        <text x="50" y="206" text-anchor="middle" class="s">1</text><text x="275" y="206" text-anchor="middle" class="s">24</text><text x="500" y="206" text-anchor="middle" class="s">48</text>
+        <text x="275" y="218" text-anchor="middle" class="s">frame</text>
+        <path class="lm" style="stroke-width:2" d="M50,140 C90,140 120,48 165,48 C210,48 240,166 275,166 C310,166 345,74 390,74 C435,74 460,140 500,140"/>
+        <g class="lg" style="stroke-dasharray:none">
+          <line x1="140" y1="48" x2="190" y2="48"/><line x1="250" y1="166" x2="300" y2="166"/><line x1="365" y1="74" x2="415" y2="74"/>
+        </g>
+        <g class="dot-m">
+          <circle cx="50" cy="140" r="5"/><circle cx="165" cy="48" r="5"/><circle cx="275" cy="166" r="5"/><circle cx="390" cy="74" r="5"/><circle cx="500" cy="140" r="5"/>
+          <circle cx="140" cy="48" r="2.5"/><circle cx="190" cy="48" r="2.5"/><circle cx="250" cy="166" r="2.5"/><circle cx="300" cy="166" r="2.5"/><circle cx="365" cy="74" r="2.5"/><circle cx="415" cy="74" r="2.5"/>
+        </g>
+        <text x="495" y="30" text-anchor="end" class="c mt">L_ArmFKctrl_01.rotateX</text>
+        <text x="165" y="36" text-anchor="middle" class="s">key + tangents</text>
+      </svg>
+      <figcaption>Illustration of one channel's curve. Five keys describe 48 frames of motion; that compactness is what makes a curve easy to edit.</figcaption>
+    </figure>
+  </div>
+
+  <h3>The challenges</h3>
+  <ol class="challenges">
+    <li><b>Same number, different motion.</b> An Unreal control is oriented like its bone, not like the Maya controller. "rotateX = 20°" on the Maya control is not "rotateX = 20°" on the Unreal one, so curves can't simply be copied.</li>
+    <li><b>Parents we don't rebuild.</b> If the animator moves <code>world_ctrl</code>, which Unreal doesn't build, every control under it moves in Maya but not in Unreal.</li>
+    <li><b>Angle flips.</b> One orientation can be written with several sets of three angles. Converting frame by frame can jump from +180° to −180° and make a control spin the long way.</li>
+    <li><b>Time and units.</b> Frame rate, start and end frames, keys between frames, and Murakami's scene in metres.</li>
+    <li><b>Channels whose meaning changed.</b> Where IK is 0 in Maya, the Unreal switch is flipped; a slider with another range became 0–1. Copied raw, those keys would be wrong.</li>
+    <li><b>Editable or faithful.</b> A key on every frame plays perfectly but buries the animator's five keys under 48.</li>
+  </ol>
+
+  <h3>How we will solve it</h3>
+  <div class="box-note">
+    <b>Two axes, one shared start.</b> Steps 1 and 2 serve both.
+    <b>Axis 1</b> (step 3): the animation stays baked, and the animator fixes a few frames with the rig.
+    <b>Axis 2</b> (steps 4 to 6): the whole animation arrives as keys on the Control Rig, so editing it in Unreal works like a retake in Maya.
+    After the shared start, the two axes don't depend on each other.
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">STEP 1</span>
+      <h4>One export, two files per clip</h4>
+      <p>An <b>Animation</b> tab in the tagger tool exports a clip (name and frame range) as:</p>
+      <ul>
+        <li><b>a baked FBX</b>: the joints recorded on every frame. Unreal imports it as an Anim Sequence. It plays exactly but can't be edited on the controls. It is the <b>answer key</b>, and the fallback;</li>
+        <li><b>a sidecar file</b> (<code>.anim.json</code>): for every control, its Maya keys and its position on every frame, plus every joint on every frame, in Unreal axes and centimetres.</li>
+      </ul>
+      <p><b>Built.</b> The Animation tab (clip name, frame range, Export Clip) lists which controls are keyed, and flags channels that aren't a single curve (anim layers, constraints) and parents that move but aren't rebuilt (an animated <code>world_ctrl</code>). Tested on five script-made Murakami clips: every frame matches Maya exactly, and the curve rebuilt from the exported keys matches Maya's within 0.000002 between keys.</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 210" role="img" aria-label="A Maya clip is exported as a baked FBX, which becomes an Anim Sequence in Unreal, and as an anim.json sidecar, which becomes keys on the Control Rig in a Level Sequence; the animation check compares both against Maya.">
+        <rect class="bm" x="0" y="80" width="100" height="48" rx="5"/><text x="50" y="100" text-anchor="middle">Maya clip</text><text x="50" y="116" text-anchor="middle" class="s">keys on controls</text>
+        <rect class="bx" x="140" y="20" width="150" height="48" rx="5"/><text x="215" y="40" text-anchor="middle" class="c">.anim.fbx</text><text x="215" y="56" text-anchor="middle" class="s">baked joints</text>
+        <rect class="bx" x="140" y="140" width="150" height="48" rx="5"/><text x="215" y="160" text-anchor="middle" class="c">.anim.json</text><text x="215" y="176" text-anchor="middle" class="s">keys + every frame</text>
+        <rect class="bu" x="330" y="20" width="190" height="48" rx="5"/><text x="425" y="40" text-anchor="middle">Anim Sequence</text><text x="425" y="56" text-anchor="middle" class="s">answer key, fallback</text>
+        <rect class="bu" x="330" y="140" width="190" height="48" rx="5"/><text x="425" y="160" text-anchor="middle">Level Sequence</text><text x="425" y="176" text-anchor="middle" class="s">keys on the Control Rig</text>
+        <path class="lm" d="M100,96 C120,96 120,44 137,44" marker-end="url(#arr-m)"/>
+        <path class="lm" d="M100,112 C120,112 120,164 137,164" marker-end="url(#arr-m)"/>
+        <line class="lu" x1="290" y1="44" x2="327" y2="44" marker-end="url(#arr-u)"/>
+        <line class="lu" x1="290" y1="164" x2="327" y2="164" marker-end="url(#arr-u)"/>
+        <path class="lg" d="M425,68 V140"/>
+        <text x="432" y="108" class="s">compared frame by frame</text>
+      </svg>
+      <figcaption>The baked file needs only stock tools. The sidecar is what lets Unreal rebuild the animation on the controls.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">STEP 2</span>
+      <h4>Every frame is a pose: reuse the pose check</h4>
+      <p>The pose check already proves that "these Maya control moves" give "these joints" in Unreal. An animation is one such pose per frame. For each frame, Unreal:</p>
+      <ol>
+        <li>applies each control's Maya motion (its world movement from rest, as the pose check does);</li>
+        <li>solves the rig, then re-applies twice, so controls under moving parents land right;</li>
+        <li>reads each control's value and keys it at that frame.</li>
+      </ol>
+      <p>Working from world motion answers challenges 1 and 2: the control's orientation doesn't matter, and a moving <code>world_ctrl</code> is already inside each control's motion.</p>
+      <p>The angles are written by us, each frame choosing the form closest to the previous frame, which answers challenge 3.</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 260" role="img" aria-label="Each Maya frame becomes a pose: apply the Maya motion, solve and re-apply twice, read the control value, key it. Below: a 360 degree spin converted frame by frame jumps from +180 to -180; choosing the angle closest to the previous frame keeps a continuous curve.">
+        <g>
+          <rect class="bm" x="0" y="10" width="34" height="26" rx="4"/><text x="17" y="27" text-anchor="middle" class="s">f1</text>
+          <rect class="bm" x="40" y="10" width="34" height="26" rx="4"/><text x="57" y="27" text-anchor="middle" class="s">f2</text>
+          <rect class="bm" x="80" y="10" width="34" height="26" rx="4"/><text x="97" y="27" text-anchor="middle" class="s">f3</text>
+          <text x="128" y="27" class="s">…</text>
+          <rect class="bm" x="146" y="10" width="40" height="26" rx="4"/><text x="166" y="27" text-anchor="middle" class="s">f48</text>
+        </g>
+        <rect class="bu" x="214" y="4" width="92" height="38" rx="5"/><text x="260" y="20" text-anchor="middle" class="s">apply Maya</text><text x="260" y="34" text-anchor="middle" class="s">motion</text>
+        <rect class="bu" x="318" y="4" width="92" height="38" rx="5"/><text x="364" y="20" text-anchor="middle" class="s">solve,</text><text x="364" y="34" text-anchor="middle" class="s">re-apply ×2</text>
+        <rect class="bu" x="422" y="4" width="98" height="38" rx="5"/><text x="471" y="20" text-anchor="middle" class="s">read value,</text><text x="471" y="34" text-anchor="middle" class="s">key frame f</text>
+        <line class="ln" x1="188" y1="23" x2="211" y2="23" marker-end="url(#arr)"/>
+        <line class="ln" x1="306" y1="23" x2="315" y2="23" marker-end="url(#arr)"/>
+        <line class="ln" x1="410" y1="23" x2="419" y2="23" marker-end="url(#arr)"/>
+        <text x="130" y="84" text-anchor="middle" class="h wt">Converted frame by frame</text>
+        <line class="ln" x1="20" y1="230" x2="240" y2="230"/><line class="ln" x1="20" y1="230" x2="20" y2="96"/>
+        <line class="lg" x1="20" y1="163" x2="240" y2="163"/>
+        <text x="16" y="104" text-anchor="end" class="s">360</text><text x="16" y="167" text-anchor="end" class="s">0</text><text x="16" y="200" text-anchor="end" class="s">−180</text>
+        <path class="lw" style="stroke-dasharray:none;stroke-width:2" d="M20,163 L130,129.5 M130,196.5 L240,163"/>
+        <line class="lg" x1="130" y1="129.5" x2="130" y2="196.5" style="stroke:var(--warn)"/>
+        <text x="136" y="126" class="s wt">+180 → −180</text>
+        <text x="390" y="84" text-anchor="middle" class="h ut">Closest to the previous frame</text>
+        <line class="ln" x1="280" y1="230" x2="500" y2="230"/><line class="ln" x1="280" y1="230" x2="280" y2="96"/>
+        <line class="lg" x1="280" y1="163" x2="500" y2="163"/>
+        <text x="276" y="104" text-anchor="end" class="s">360</text><text x="276" y="167" text-anchor="end" class="s">0</text>
+        <path class="lu" style="stroke-width:2" d="M280,163 L500,96"/>
+        <text x="390" y="250" text-anchor="middle" class="s">a 360° spin over 48 frames</text>
+        <text x="130" y="250" text-anchor="middle" class="s">a 360° spin over 48 frames</text>
+      </svg>
+      <figcaption>Top: the per-frame loop, the same one the pose check uses. Bottom: why the angles are chosen by us. Both curves describe the same spin; only the right one interpolates correctly between frames.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">STEP 3</span>
+      <h4>Axis 1: retakes on the baked clip</h4>
+      <p>Often the animator doesn't need the whole clip on controls, only a few frames to fix. So the first Unreal milestone is:</p>
+      <ul>
+        <li>the baked animation plays the whole clip, exactly;</li>
+        <li>the animator picks a frame range; only there does the Control Rig take over, keyed with step 2;</li>
+        <li>a few frames of blend at each edge hand over between the two.</li>
+      </ul>
+      <p>The controls in the window start from <b>Maya's own pose</b>, read from the sidecar. Unreal's stock way of putting controls on an existing animation has to work this out backwards from the bones, which our rigs can't do. We don't have to: we already know where every Maya control was on every frame.</p>
+      <p>Because the rig matches Maya within T1 (0.1 cm), the hand-over at each edge has almost nothing to hide.</p>
+      <p>To compare: Unreal's own FK Control Rig can already be layered on a baked clip, but only joint by joint (no IK, spline or sliders).</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 210" role="img" aria-label="Timeline: the baked animation plays frames 1 to 120; a Control Rig layer covers frames 50 to 75 with blends from 44 and to 81; the result is baked, blend, edited window, blend, baked.">
+        <text x="0" y="34" class="h">Baked</text>
+        <rect class="bm" x="110" y="18" width="410" height="26" rx="4"/>
+        <text x="315" y="35" text-anchor="middle" class="s">exact, not editable</text>
+        <text x="0" y="84" class="h">Control Rig</text>
+        <polygon class="bu" points="258,96 280,68 366,68 388,96"/>
+        <text x="323" y="87" text-anchor="middle" class="s">you edit</text>
+        <text x="0" y="134" class="h">What plays</text>
+        <rect class="bm" x="110" y="118" width="148" height="26" rx="4"/>
+        <rect class="bx" x="258" y="118" width="22" height="26"/>
+        <rect class="bu" x="280" y="118" width="86" height="26"/>
+        <rect class="bx" x="366" y="118" width="22" height="26"/>
+        <rect class="bm" x="388" y="118" width="132" height="26" rx="4"/>
+        <text x="110" y="162" text-anchor="middle" class="s">1</text>
+        <text x="280" y="162" text-anchor="middle" class="s">50</text>
+        <text x="366" y="162" text-anchor="middle" class="s">75</text>
+        <text x="520" y="162" text-anchor="end" class="s">120</text>
+        <text x="269" y="186" text-anchor="middle" class="s">grey: blend frames</text>
+        <text x="323" y="204" text-anchor="middle" class="s">at frame 50, the controls start from Maya's own pose</text>
+      </svg>
+      <figcaption>Outside the window the clip stays exact. Limit: a retake that moves the whole character (hips forward) doesn't carry into the frames after the window; the blend pulls back to the baked motion.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">STEP 4</span>
+      <h4>Axis 2: keys that behave like Maya's</h4>
+      <p>For an edit in Unreal to act like a retake in Maya, the Unreal curve must hold <b>the animator's own keys</b>, not a key on every frame.</p>
+      <ul>
+        <li>With the animator's keys, moving one key bends the curve smoothly into its neighbours, as in Maya's Graph Editor.</li>
+        <li>With a key on every frame, the same move changes one frame only: a spike.</li>
+      </ul>
+      <p>Move the key at frame 24 and compare. So axis 2 copies the Maya keys wherever it can be exact (step 5), and uses per-frame keys only for what can't be copied yet.</p>
+      <p>To prove it, an <b>edit test</b>: the same scripted edits (move a key, shift it in time, change a tangent, delete one) are made in Maya and in Unreal, and the two results are compared frame by frame.</p>
+    </div>
+    <figure>
+      <svg class="d" id="ed-svg" viewBox="0 0 520 230" role="img" aria-label="Interactive: moving the key at frame 24 bends the curve smoothly when the curve holds the animator's five keys, and makes a one-frame spike when it holds a key on every frame.">
+        <line class="ln" x1="50" y1="190" x2="500" y2="190"/><line class="ln" x1="50" y1="190" x2="50" y2="20"/>
+        <g id="ed-ticks"></g>
+        <path id="ed-orig" class="lg"/>
+        <path id="ed-dense" class="lu" style="stroke-width:1.6"/>
+        <path id="ed-sparse" class="lm" style="stroke-width:2.2"/>
+        <g id="ed-keys"></g>
+        <g transform="translate(330,24)">
+          <line x1="0" y1="0" x2="22" y2="0" class="lm" style="stroke-width:2.2"/><text x="30" y="4" class="s">animator's 5 keys</text>
+          <line x1="0" y1="17" x2="22" y2="17" class="lu" style="stroke-width:1.6"/><text x="30" y="21" class="s">a key on every frame</text>
+          <line x1="0" y1="34" x2="22" y2="34" class="lg"/><text x="30" y="38" class="s">before the edit</text>
+        </g>
+        <text x="275" y="224" text-anchor="middle" class="s">frame</text>
+      </svg>
+      <div class="controls">
+        <label for="ed-d">Move the key at frame 24 <input type="range" id="ed-d" min="-10" max="25" step="0.5" value="15"> <span class="val" id="ed-dv"></span></label>
+      </div>
+      <figcaption>Same edit, same starting motion. Only the teal curve reacts the way a Maya animator expects. Illustration.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">STEP 5</span>
+      <h4>Copy the keys wherever they mean the same thing</h4>
+      <p>Many channels can take the Maya keys as they are: same frames, same tangents. A swap or a range change is a straight-line rule, and a curve stays exact under it (challenge 5).</p>
+      <p>Rotations can be copied when the Unreal control's axes are the Maya controller's axes, possibly under other names. On Murakami that's 40 of 49 controls. For the 9 others, we will compare two fixes: give the Unreal control the Maya controller's axes, or key them at Maya's key times with a few extra keys.</p>
+      <p>Tangents are converted explicitly, because Maya's and Unreal's "auto" tangents don't compute the same slopes.</p>
+    </div>
+    <figure>
+      <div class="scroll">
+      <table class="t">
+        <thead><tr><th>Channel</th><th>Keys in Unreal</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><code>IK_FK</code> switch</td><td><span class="chip ok">copied</span></td><td>flipped when IK is 0 in Maya</td></tr>
+          <tr><td>Space enum</td><td><span class="chip ok">copied</span></td><td>same numbers, 0..N−1</td></tr>
+          <tr><td>Sliders (face, petals)</td><td><span class="chip ok">copied</span></td><td>range rescaled if it became 0–1</td></tr>
+          <tr><td>Translate</td><td><span class="chip ok">copied</span> or <span class="chip driven">per frame</span></td><td>copied only when the Unreal parent is the Maya parent</td></tr>
+          <tr><td>Rotate, same axes (40 of 49)</td><td><span class="chip ok">copied</span></td><td>channels renamed, rotate order set on the control</td></tr>
+          <tr><td>Rotate, other axes (9 of 49)</td><td><span class="chip driven">per frame</span>, then fixed</td><td>control frames differ (challenge 1)</td></tr>
+          <tr><td>Anim layers, constraints on a control</td><td><span class="chip driven">per frame</span></td><td>no single curve to copy</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <figcaption>Each channel is reported with the method used, so the result is never a silent mix.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">STEP 6</span>
+      <h4>Fewer keys, measured</h4>
+      <p>For the channels that still have a key on every frame, Unreal can drop keys that a straight or smooth line between their neighbours already explains, within a <b>tolerance</b> (Sequencer's key reduction). Fewer keys are easier to edit; a looser tolerance moves the motion further from Maya.</p>
+      <p>We will measure that trade-off instead of picking a number blindly (challenge 6). Try it: move the tolerance and watch the keys and the error.</p>
+    </div>
+    <figure>
+      <svg class="d" id="an-svg" viewBox="0 0 520 230" role="img" aria-label="Interactive: the Maya curve with five keys, the per-frame keys after reduction, and the largest error on a frame for a chosen tolerance.">
+        <line class="ln" x1="50" y1="190" x2="500" y2="190"/><line class="ln" x1="50" y1="190" x2="50" y2="20"/>
+        <g id="an-ticks"></g>
+        <path id="an-maya" class="lm" style="stroke-width:2"/>
+        <path id="an-red" class="lu" style="stroke-width:1.6"/>
+        <g id="an-keys"></g>
+        <text id="an-read" x="62" y="34" class="c"></text>
+        <text x="275" y="224" text-anchor="middle" class="s">frame</text>
+      </svg>
+      <div class="controls">
+        <label for="an-tol">Tolerance <input type="range" id="an-tol" min="0" max="4" step="0.1" value="0.5"> <span class="val" id="an-tolv"></span></label>
+      </div>
+      <figcaption>Teal: the Maya curve (5 keys). Amber dots: the Unreal keys left after reduction, joined by straight lines. At tolerance 0, every frame keeps its key. Illustration: real reduction keeps smooth tangents, so its error is lower.</figcaption>
+    </figure>
+  </div>
+
+  <h3>How we will know it works</h3>
+  <div class="sol" style="border:0;padding-top:0">
+    <div>
+      <p>An <b>animation check</b>, built like the pose check:</p>
+      <ul>
+        <li>Unreal plays the Level Sequence, records every bone on every frame, and compares with the Maya joints in the sidecar (motion from rest, T0/T1 tiers, per module).</li>
+        <li><b>The measuring stick:</b> the same comparison on the baked Anim Sequence must give about 0. If not, the check is wrong, not the rig.</li>
+        <li><b>Editability numbers:</b> keys per channel in Unreal against Maya, and which channels were copied or keyed per frame.</li>
+        <li>The report shows the error on every frame, the worst frames with their worst joints, and the change since the last run.</li>
+      </ul>
+      <p><b>Axis 1</b> adds three numbers: frames outside the window must equal the baked clip, an untouched window must stay within T1, and neither edge may add a visible jump.</p>
+      <p><b>Axis 2</b> adds two: copied channels must match Maya's curves, also between keys; and the edit test must stay within T1.</p>
+      <p>Test clips: script-made Murakami clips (body FK, an IK/FK switch keyed mid-clip, the spine, an animated <code>world_ctrl</code>, a 360° spin). Space switches and sliders follow once they have run in Unreal (<a href="#unreal-todo">above</a>).</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 200" role="img" aria-label="Illustration of the planned report graph: the largest joint error on each frame, with the T1 limit of 0.1 cm as a dashed line.">
+        <line class="ln" x1="50" y1="170" x2="500" y2="170"/><line class="ln" x1="50" y1="170" x2="50" y2="20"/>
+        <line class="lw" x1="50" y1="50" x2="500" y2="50"/><text x="496" y="44" text-anchor="end" class="s wt">T1: 0.1 cm</text>
+        <text x="44" y="174" text-anchor="end" class="s">0</text><text x="44" y="54" text-anchor="end" class="s">0.1</text>
+        <text x="50" y="186" text-anchor="middle" class="s">1</text><text x="500" y="186" text-anchor="middle" class="s">48</text>
+        <text x="275" y="198" text-anchor="middle" class="s">frame</text>
+        <path class="lu" style="stroke-width:2" d="M50,166 L80,160 L110,150 L140,154 L170,132 L200,120 L230,138 L260,148 L290,126 L320,110 L350,128 L380,146 L410,140 L440,156 L470,160 L500,164"/>
+        <text x="60" y="34" class="c">largest joint error per frame (cm)</text>
+      </svg>
+      <figcaption>Illustration of the planned graph. No animation has been transferred yet, so these are not results.</figcaption>
+    </figure>
+  </div>
+
+  <h3>Limits and open decisions</h3>
+  <ul>
+    <li><b>Carry the Maya controller's orientation on the controls?</b> It changes the rotate arrows animators see in Unreal and whether rotation keys can be copied exactly, not how the character moves. On Murakami, 19 of 49 controls already have their bone's axes, 21 have the same axes under other names (still copyable with a renaming rule), and only 9 really differ (leg IK and foot, three neck controls, the eyes). Decided later, at the key-copy step, by comparing both with the animation check.</li>
+    <li><b>Which clips?</b> Script-made clips first. An animation made by an animator, if one exists for Murakami, would be the stronger test.</li>
+    <li>Scale animation isn't planned. Unreal's "Bake to Control Rig" (any animation onto the controls) would need a backwards solve our rigs don't have, so it comes later.</li>
+    <li>Several Unreal steps (importing an animation-only FBX in 5.6, the names of animation channels in Sequencer) are known from the engine's headers but haven't run yet.</li>
+  </ul>
+  <p class="muted">Full engineering plan: <code>docs/animation-export.md</code>.</p>
+</section>
+
 <footer>
   <p><b>Changelog</b></p>
   <ul>
+    <li>2026-11-02: animation clip export built in Maya (Animation tab, baked FBX + sidecar), tested on five script-made clips.</li>
+    <li>2026-11-02: added "Animation export (plan)": the routes assessed, the recommended first steps, and how the result will be measured. Same day: split into two axes after a shared start (axis 1: retakes on the baked clip; axis 2: the animator's keys on the Control Rig, with an edit test), and the control-axes question got Murakami's numbers. Nothing built yet.</li>
+    <li>2026-10-23: space switches driven by the controller's own channel are wired after the control is built; Murakami test setups (arm IK spaces, neck curl) in <code>tools/maya/murakami_feature_setup.py</code>.</li>
     <li>2026-10-22: all features covered: added pipeline and manifest, IK/FK limbs, spline IK, constraints and follow spaces, rest correction, blendshapes, pose check, graph layout, tagger tool. Page reordered from foundations to tools.</li>
     <li>2026-10-22: first batch: the shared walker, space switching, offset / zero groups, materials, custom attributes.</li>
   </ul>
@@ -2697,6 +3009,85 @@ section[id] { scroll-margin-top: 16px; }
     $("ac-read2").textContent = "normalise + atan2:  0.000°";
   }
   $("ac-e").addEventListener("input", acRender); acRender();
+
+  /* ---------------- animation key reduction demo ---------------- */
+  /* Illustrative Maya curve: 5 keys, smooth (Catmull-Rom style) tangents, sampled on frames 1..48. */
+  const AK = [[1, 0], [12, 35], [24, -10], [36, 25], [48, 0]];
+  const AV_MIN = -20, AV_MAX = 45;
+  const anX = (f) => 50 + ((f - 1) / 47) * 450, anY = (v) => 190 - ((v - AV_MIN) / (AV_MAX - AV_MIN)) * 170;
+  function anSlope(i) {
+    if (i === 0 || i === AK.length - 1) return 0;
+    return (AK[i + 1][1] - AK[i - 1][1]) / (AK[i + 1][0] - AK[i - 1][0]);
+  }
+  function anEval(f) {
+    let i = 0; while (i < AK.length - 2 && f > AK[i + 1][0]) i++;
+    const [f0, v0] = AK[i], [f1, v1] = AK[i + 1], h = f1 - f0, t = (f - f0) / h;
+    const m0 = anSlope(i) * h, m1 = anSlope(i + 1) * h, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * v0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * v1 + (t3 - t2) * m1;
+  }
+  const AS = []; for (let f = 1; f <= 48; f++) AS.push([f, anEval(f)]);
+  function rdp(pts, tol) {
+    if (pts.length < 3) return pts.slice();
+    const [a, b] = [pts[0], pts[pts.length - 1]];
+    let worst = -1, idx = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const v = a[1] + ((pts[i][0] - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
+      const d = Math.abs(pts[i][1] - v);
+      if (d > worst) { worst = d; idx = i; }
+    }
+    if (worst <= tol) return [a, b];
+    const left = rdp(pts.slice(0, idx + 1), tol), right = rdp(pts.slice(idx), tol);
+    return left.slice(0, -1).concat(right);
+  }
+  (function () {
+    const g = $("an-ticks");
+    [1, 12, 24, 36, 48].forEach((f) => { el("line", { x1: anX(f), y1: 190, x2: anX(f), y2: 195, class: "ln" }, g); const t = el("text", { x: anX(f), y: 207, "text-anchor": "middle", class: "s" }, g); t.textContent = f; });
+    [-15, 0, 15, 30, 45].forEach((v) => { el("line", { x1: 45, y1: anY(v), x2: 50, y2: anY(v), class: "ln" }, g); const t = el("text", { x: 41, y: anY(v) + 4, "text-anchor": "end", class: "s" }, g); t.textContent = v + "°"; });
+    let d = ""; for (let i = 0; i <= 235; i++) { const f = 1 + (i / 235) * 47; d += (i ? " L" : "M") + anX(f).toFixed(1) + "," + anY(anEval(f)).toFixed(1); }
+    $("an-maya").setAttribute("d", d);
+  })();
+  function anRender() {
+    const tol = +$("an-tol").value;
+    $("an-tolv").textContent = tol.toFixed(1) + "°";
+    const kept = tol <= 0 ? AS.slice() : rdp(AS, tol);
+    let err = 0;
+    for (let k = 0; k < kept.length - 1; k++) {
+      const [fa, va] = kept[k], [fb, vb] = kept[k + 1];
+      for (let f = fa; f <= fb; f++) err = Math.max(err, Math.abs(AS[f - 1][1] - (va + ((f - fa) / (fb - fa)) * (vb - va))));
+    }
+    $("an-red").setAttribute("d", "M" + kept.map((p) => anX(p[0]).toFixed(1) + "," + anY(p[1]).toFixed(1)).join(" L"));
+    const g = $("an-keys"); while (g.firstChild) g.removeChild(g.firstChild);
+    kept.forEach((p) => el("circle", { cx: anX(p[0]), cy: anY(p[1]), r: kept.length > 30 ? 2.6 : 4, class: "dot-u" }, g));
+    $("an-read").textContent = "Unreal keys: " + kept.length + "   Maya keys: 5   largest error: " + err.toFixed(2) + "°";
+  }
+  $("an-tol").addEventListener("input", anRender); anRender();
+
+  /* ---------------- edit one key demo ---------------- */
+  function hEval(K, f) {
+    const sl = (i) => (i === 0 || i === K.length - 1) ? 0 : (K[i + 1][1] - K[i - 1][1]) / (K[i + 1][0] - K[i - 1][0]);
+    let i = 0; while (i < K.length - 2 && f > K[i + 1][0]) i++;
+    const [f0, v0] = K[i], [f1, v1] = K[i + 1], h = f1 - f0, t = (f - f0) / h, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * v0 + (t3 - 2 * t2 + t) * sl(i) * h + (-2 * t3 + 3 * t2) * v1 + (t3 - t2) * sl(i + 1) * h;
+  }
+  const curvePath = (K) => { let d = ""; for (let i = 0; i <= 235; i++) { const f = 1 + (i / 235) * 47; d += (i ? " L" : "M") + anX(f).toFixed(1) + "," + anY(hEval(K, f)).toFixed(1); } return d; };
+  (function () {
+    const g = $("ed-ticks");
+    [1, 12, 24, 36, 48].forEach((f) => { el("line", { x1: anX(f), y1: 190, x2: anX(f), y2: 195, class: "ln" }, g); const t = el("text", { x: anX(f), y: 207, "text-anchor": "middle", class: "s" }, g); t.textContent = f; });
+    [-15, 0, 15, 30, 45].forEach((v) => { el("line", { x1: 45, y1: anY(v), x2: 50, y2: anY(v), class: "ln" }, g); const t = el("text", { x: 41, y: anY(v) + 4, "text-anchor": "end", class: "s" }, g); t.textContent = v + "°"; });
+    $("ed-orig").setAttribute("d", curvePath(AK));
+  })();
+  function edRender() {
+    const d = +$("ed-d").value;
+    $("ed-dv").textContent = (d > 0 ? "+" : "") + d + "°";
+    const K = AK.map((k) => (k[0] === 24 ? [24, k[1] + d] : k));
+    $("ed-sparse").setAttribute("d", curvePath(K));
+    const dense = AS.map(([f, v]) => [f, f === 24 ? v + d : v]);
+    $("ed-dense").setAttribute("d", "M" + dense.map((p) => anX(p[0]).toFixed(1) + "," + anY(p[1]).toFixed(1)).join(" L"));
+    const g = $("ed-keys"); while (g.firstChild) g.removeChild(g.firstChild);
+    K.forEach((k) => el("circle", { cx: anX(k[0]), cy: anY(k[1]), r: 4.5, class: "dot-m" }, g));
+    el("circle", { cx: anX(24), cy: anY(dense[23][1]), r: 3.5, class: "dot-u" }, g);
+  }
+  $("ed-d").addEventListener("input", edRender); edRender();
 
   /* ---------------- index highlight ---------------- */
   const links = Array.from(document.querySelectorAll("nav.index a"));

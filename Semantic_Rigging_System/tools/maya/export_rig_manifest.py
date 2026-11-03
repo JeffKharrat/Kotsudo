@@ -4470,6 +4470,37 @@ def scene_analysis(rig_name, modules_config):
             check('orange', 'Controller shape', summary['name'],
                   'curve shape could not be exported; Unreal will use a default shape')
 
+    # Skinned joints a controller drives but no module claims: Unreal will
+    # never move them (e.g. a toe tagged on one side only). Helper chains
+    # (IK/FK copies) are driven too but deform nothing, so they are skipped.
+    claimed, module_of = set(), {}
+    for module in manifest.get('modules') or []:
+        for joint in module.get('chain') or []:
+            claimed.add(_short_node_name(joint))
+            module_of[_short_node_name(joint)] = module.get('module_name')
+    skinned = {_short_node_name(j) for cluster in cmds.ls(type='skinCluster') or []
+               for j in cmds.skinCluster(cluster, query=True, influence=True) or []}
+    for joint in _exported_joints():
+        short = _short_node_name(joint)
+        if short in claimed or short not in skinned:
+            continue
+        drivers = []
+        for constraint in sorted(set(cmds.listConnections(joint, type='constraint', source=True,
+                                                          destination=False) or [])):
+            for target in _constraint_targets(constraint):
+                controller = _nearest_controller_transform(target)
+                if controller and _short_node_name(controller) not in drivers:
+                    drivers.append(_short_node_name(controller))
+        if not drivers:
+            continue
+        mirror = None
+        for a, b in (('L_', 'R_'), ('R_', 'L_'), ('Left', 'Right'), ('Right', 'Left')):
+            if short.startswith(a) and module_of.get(b + short[len(a):]):
+                mirror = module_of[b + short[len(a):]]
+        check('orange', 'Untagged joint', short,
+              'driven by {} but in no module: Unreal will not move it. Tag it as a module{}'.format(
+                  ', '.join(drivers), ' (its mirror is in {})'.format(mirror) if mirror else ''))
+
     # Spaces that could not be described (Unreal falls back to a bone).
     noted = set()
     for record in records:
@@ -4687,8 +4718,15 @@ def export_control_shapes_fbx(shapes_dir):
     return exported
 
 
-def export_fbx(fbx_path, export_nodes):
-    """Configure the Maya FBX exporter and export selected nodes."""
+def export_fbx(fbx_path, export_nodes, bake_range=None):
+    """Configure the Maya FBX exporter and export selected nodes.
+
+    ``bake_range`` = (start, end) frames bakes every exported node's
+    animation on each frame of the range (an animation clip); the default
+    exports no animation, as for the rig itself.
+    """
+    if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+        cmds.loadPlugin("fbxmaya", quiet=True)     # not auto-loaded in mayapy
     cmds.select(export_nodes, replace=True)
 
     mel.eval("FBXResetExport")
@@ -4704,7 +4742,14 @@ def export_fbx(fbx_path, export_nodes):
     mel.eval("FBXExportCameras -v false")
     mel.eval("FBXExportLights -v false")
     mel.eval("FBXExportEmbeddedTextures -v false")
-    mel.eval("FBXExportBakeComplexAnimation -v false")
+    if bake_range:
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v {}".format(int(bake_range[0])))
+        mel.eval("FBXExportBakeComplexEnd -v {}".format(int(bake_range[1])))
+        mel.eval("FBXExportBakeComplexStep -v 1")
+        mel.eval("FBXExportBakeResampleAnimation -v true")
+    else:
+        mel.eval("FBXExportBakeComplexAnimation -v false")
     mel.eval("FBXExportUpAxis y")
     mel.eval("FBXExportFileVersion -v FBX201800")
     mel.eval('FBXExport -f "{}" -s'.format(fbx_path.replace("\\", "/")))
@@ -4752,6 +4797,34 @@ def export(export_dir, filename_base, rig_name, modules_config):
 
     _restore_bind_pose(modules_config)
 
+    export_skeleton_and_meshes_fbx(fbx_path)
+    verify_exported_fbx(fbx_path, manifest)
+
+    # Controller shapes travel as mesh-only FBXs (tube meshes built from the
+    # Maya curves). A failure here must not lose the rig export.
+    LAST_EXPORT_SUMMARY.clear()
+    LAST_EXPORT_SUMMARY.update({
+        'fbx': fbx_path,
+        'modules': len(manifest.get('modules') or []),
+        'blendshapes': len(manifest.get('blendshapes') or []),
+        'shapes_expected': len(_SHAPE_RAW),
+        'shapes_exported': 0,
+        'shapes_failed': [],
+        'poses': None,
+    })
+    _export_shapes_and_poses(export_dir, shapes_dir, manifest)
+    print("[RigManifest] Export complete -> {}".format(fbx_path))
+    return fbx_path
+
+
+def export_skeleton_and_meshes_fbx(fbx_path, bake_range=None):
+    """Export the root joint hierarchy and the visible meshes to ``fbx_path``.
+
+    The rig export (no animation) and the animation clip export
+    (``bake_range`` = (start, end)) write the same nodes, so a clip's
+    skeleton always matches the rig's. Mesh transforms whose short name
+    clashes with a joint (or another mesh) are renamed for the export only.
+    """
     mesh_transforms = collect_visible_mesh_transforms()
     root_matches = cmds.ls(ROOT_JOINT_NAME, long=True, type="joint") or []
     root_node = root_matches[0] if root_matches else ROOT_JOINT_NAME
@@ -4797,27 +4870,18 @@ def export(export_dir, filename_base, rig_name, modules_config):
             export_nodes[i] = cmds.ls(uuid, long=True)[0] if new_path else new_path
             print("[RigManifest] Renamed '{}' -> '{}' for export.".format(short, new_name))
 
-        export_fbx(fbx_path, export_nodes)
+        export_fbx(fbx_path, export_nodes, bake_range=bake_range)
     finally:
         for uuid, original in renamed:
             nodes = cmds.ls(uuid, long=True) or []
             if nodes:
                 cmds.rename(nodes[0], original)
+    return fbx_path
 
-    verify_exported_fbx(fbx_path, manifest)
 
-    # Controller shapes travel as mesh-only FBXs (tube meshes built from the
-    # Maya curves). A failure here must not lose the rig export.
-    LAST_EXPORT_SUMMARY.clear()
-    LAST_EXPORT_SUMMARY.update({
-        'fbx': fbx_path,
-        'modules': len(manifest.get('modules') or []),
-        'blendshapes': len(manifest.get('blendshapes') or []),
-        'shapes_expected': len(_SHAPE_RAW),
-        'shapes_exported': 0,
-        'shapes_failed': [],
-        'poses': None,
-    })
+def _export_shapes_and_poses(export_dir, shapes_dir, manifest):
+    """Controller shape FBXs and the test poses, after the rig FBX.
+    Failures are reported but never lose the rig export."""
     if _SHAPE_RAW:
         try:
             exported_shapes = export_control_shapes_fbx(shapes_dir) or []
@@ -4861,9 +4925,6 @@ def export(export_dir, filename_base, rig_name, modules_config):
         traceback.print_exc()
         cmds.warning("[RigManifest] Test-pose export failed ({}: {}); the harness will have "
                      "nothing to replay. Traceback in the Script Editor.".format(type(exc).__name__, exc))
-
-    print("[RigManifest] Export complete -> {}".format(fbx_path))
-    return fbx_path
 
 
 # ---------------------------------------------------------------------------
