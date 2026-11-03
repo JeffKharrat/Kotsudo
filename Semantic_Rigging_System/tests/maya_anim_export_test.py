@@ -2,8 +2,9 @@
 
     "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe" tests/maya_anim_export_test.py <murakami_copy.ma> [out_dir]
 
-Keys each script-made clip (tools/maya/test_animations.py) on Murakami,
-exports it, and checks the sidecar against what Maya computes:
+Keys each script-made clip (tools/maya/test_animations.py) on Murakami (V06,
+or V010 built with Jeffy), exports it, and checks the sidecar against what
+Maya computes:
 
   * frames, rate and range;
   * the rest pose equals the un-animated rest (the pose check's), even when
@@ -80,11 +81,16 @@ def main():
     scene = sys.argv[1]
     out_dir = sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="kotsudo_anim_")
     cmds.file(scene, open=True, force=True, ignoreVersion=True)
+    if not cmds.objExists(erm.manifest_plug()):     # never exported: export the rig first
+        import rig_tagger_tool
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        erm.export(out_dir, "rig", "rig", rig_tagger_tool.scene_modules())
     manifest = ea.manifest_from_scene()
     controls = etp.manifest_controls(manifest)
     print("Scene: {}  controls: {}  out: {}".format(scene, len(controls), out_dir))
 
     ta.clear_animation()
+    cast = ta.rig_cast()
     reference_rest = ea.control_rest(controls, manifest)
     rng = random.Random(3)
 
@@ -162,27 +168,42 @@ def main():
 
         # -- clip-specific -----------------------------------------------------------
         if clip == "stress":
-            neck = doc["controls"]["neck_ctrl_01"]["channels"]["rotateZ"]
+            neck = doc["controls"][cast["neck"]]["channels"]["rotateZ"]
             check(neck["source"] == "layered", "stress: neck layer seen as {}".format(neck["source"]))
-            petal = doc["controls"]["Head_Settings_Ctrl"]["channels"].get("Petal_Rotation")
-            if petal:
-                check(petal["source"] == "keys" and petal["keys"][0][3] == "step",
+            slider_name, slider_attr = cast["slider"]
+            slider = (doc["controls"].get(slider_name) or {}).get("channels", {}).get(slider_attr)
+            check(slider, "stress: slider {}.{} not exported".format(slider_name, slider_attr))
+            if slider:
+                check(slider["source"] == "keys" and slider["keys"][0][3] == "step",
                       "stress: stepped slider keys")
-            head = doc["controls"]["head_ctrl"]["channels"]["rotateY"]["values"]
+            head = doc["controls"][cast["head"]]["channels"]["rotateY"]["values"]
             check(abs(head[-1] - 360.0) < 1e-3, "stress: head spin ends at {}".format(head[-1]))
-            chest = doc["controls"]["chest_ctrl"]
+            chest = doc["controls"][cast["chest"]]
             check(chest["rotate_order"] == 2, "stress: chest rotate order {}".format(chest["rotate_order"]))
             check(18.5 in [k[0] for k in chest["channels"]["rotateZ"]["keys"]], "stress: sub-frame key")
-            check(doc["controls"]["L_ArmFKctrl_01"]["channels"]["rotateZ"]["weighted"],
+            check(doc["controls"][cast["arm_fk"]]["channels"]["rotateZ"]["weighted"],
                   "stress: weighted curve")
         if clip == "world":
-            moved = [n for n, c in doc["controls"].items() if "world_ctrl" in (c.get("parents_animated") or [])]
-            print("  controls under the animated world_ctrl: {}".format(len(moved)))
-            check(moved, "world: world_ctrl motion not reported")
-            check(any("world_ctrl" in note for note in doc["notes"]), "world: no note")
+            world = cast["world"]
+            if world in doc["controls"]:
+                # An exported control (V010: Jeffy's rig_base global control): its own keys.
+                sources = {a: c["source"] for a, c in doc["controls"][world]["channels"].items()}
+                print("  {} is an exported control: {}".format(world, sources))
+                check(all(sources.get(a) == "keys" for a in ("translateX", "translateZ", "rotateY")),
+                      "world: {} keys not exported ({})".format(world, sources))
+            else:
+                # Not a control (V06 world_ctrl): reported as a moving parent.
+                moved = [n for n, c in doc["controls"].items() if world in (c.get("parents_animated") or [])]
+                print("  controls under the animated {}: {}".format(world, len(moved)))
+                check(moved, "world: {} motion not reported".format(world))
+                check(any(world in note for note in doc["notes"]), "world: no note")
         if clip == "ikfk_switch":
-            values = doc["switch_values"]["L_Arm_IKFK_Switch.IK_FK"]
-            check(values[0] == 0.0 and values[-1] == 1.0, "ikfk: switch values {}..{}".format(values[0], values[-1]))
+            arm = [s for s in doc["switches"] if "Arm" in s["control"]]
+            check(arm, "ikfk: no arm switch in the clip")
+            for switch in arm[:1]:
+                values = doc["switch_values"]["{}.{}".format(switch["control"], switch["attribute"])]
+                check(values[0] == switch["ik"] and values[-1] == switch["fk"],
+                      "ikfk: switch values {}..{}".format(values[0], values[-1]))
         if bake:
             fbx = summary["fbx"]
             with open(fbx, "rb") as handle:

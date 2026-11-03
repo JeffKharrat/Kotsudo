@@ -43,6 +43,10 @@ MODULE_PREFIX = "Jeffy."
 KNOWN_VERSIONS = {1}
 #: Jeffy setup types the Unreal builder rebuilds (filled phase by phase, J2-J5)
 UNREAL_SUPPORTED_TYPES = set()
+#: IK/FK switch: the ``ikFk`` attribute of a setup's ``settings`` control
+#: (1 = IK, 0 = FK; measured on V010: at 0 only the FK controls move the joints)
+SWITCH_ATTR = "ikFk"
+SWITCH_IK_VALUE, SWITCH_FK_VALUE = 1.0, 0.0
 
 
 def _short(node):
@@ -218,10 +222,29 @@ def modules_config(setups=None):
             "end_bone": joints[-1],
             "source": "jeffy",
             "jeffy_tag": setup["tag"],
-            "params": {"jeffy": {"type": setup["type"], "tag": setup["tag"], "version": setup["version"],
-                                 "options": setup["options"]}},
+            "params": dict({"jeffy": {"type": setup["type"], "tag": setup["tag"], "version": setup["version"],
+                                      "options": setup["options"]}}, **_switch_params(setup, joints)),
         })
     return modules
+
+
+def _switch_params(setup, joints):
+    """``{"switch": ...}`` (as on tagged rigs) when the setup has an IK/FK
+    switch, else ``{}``: the clip export and the pose check use it."""
+    for control in setup["controls"]:
+        node = control["node"]
+        if control.get("key") != "settings" or not cmds.attributeQuery(SWITCH_ATTR, node=node, exists=True):
+            continue
+        value = float(cmds.getAttr("{}.{}".format(node, SWITCH_ATTR)))
+        span = SWITCH_IK_VALUE - SWITCH_FK_VALUE
+        return {"switch": {
+            "control": {"name": control["name"], "role": "settings", "anchor_bone": _short(joints[0])},
+            "attribute": SWITCH_ATTR,
+            "ik_value": SWITCH_IK_VALUE,
+            "fk_value": SWITCH_FK_VALUE,
+            "default_ik_weight": round(max(0.0, min(1.0, (value - SWITCH_FK_VALUE) / span)), 4),
+        }}
+    return {}
 
 
 def _anchor_bone(setup, control):

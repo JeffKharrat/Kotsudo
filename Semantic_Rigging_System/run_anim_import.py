@@ -5,6 +5,11 @@ Anim Sequence on the open rig's skeleton, then checks it bone by bone, frame
 by frame, against the Maya joints in the clip's sidecar. The verdict should
 be T0: that is the measuring stick every later animation step is judged by.
 
+The skeleton is the open Control Rig's (or SOURCE_ASSET_PATH, or the
+Skeletal Mesh selected in the Content Browser when no rig is open). Clips
+made for another skeleton (another rig's clips in the same folder) are
+skipped.
+
 Writes <base>.<clip>.anim_check.json next to the sidecar. See
 rig_builder/anim_import.py and docs/animation-export.md.
 """
@@ -38,19 +43,36 @@ CLIP_PATH = None            # or a full path to a <base>.<clip>.anim.json
 PRESERVE_LOCAL_TRANSFORM = False
 
 
+def _selected_skeletal_asset():
+    """The Skeletal Mesh (or Skeleton) selected in the Content Browser, or None."""
+    for asset in unreal.EditorUtilityLibrary.get_selected_assets() or []:
+        if isinstance(asset, (unreal.SkeletalMesh, unreal.Skeleton)):
+            return asset
+    return None
+
+
 def main():
     unreal.load_module("ControlRigDeveloper")
+    # The skeleton comes from, in order: SOURCE_ASSET_PATH, the open Control
+    # Rig's preview mesh, or a Skeletal Mesh selected in the Content Browser
+    # (no Control Rig needed: the baked clip check only uses the skeleton).
+    rig = None
     if CONTROL_RIG_PATH:
         rig = unreal.EditorAssetLibrary.load_asset(CONTROL_RIG_PATH)
-    else:
+    elif not SOURCE_ASSET_PATH:
         rigs = unreal.ControlRigBlueprint.get_currently_open_rig_blueprints()
-        if not rigs:
-            raise RuntimeError("No Control Rig Blueprint is open. Open one or set CONTROL_RIG_PATH.")
-        rig = rigs[0]
+        rig = rigs[0] if rigs else None
 
     builder = RigBuilder(source_asset_path=SOURCE_ASSET_PATH, rig=rig)
-    source = builder.load_source_asset()
+    if SOURCE_ASSET_PATH or rig:
+        source = builder.load_source_asset()
+    else:
+        source = _selected_skeletal_asset()
+        if not source:
+            raise RuntimeError("No skeleton: open a Control Rig, select the rig's Skeletal Mesh in the "
+                               "Content Browser, or set SOURCE_ASSET_PATH.")
     skeleton = builder.resolve_skeleton(source)
+    unreal.log(f"[AnimImport] Skeleton: {skeleton.get_path_name()}")
     mesh = source if isinstance(source, unreal.SkeletalMesh) else None
     metadata = {}
     metadata.update(get_asset_metadata(mesh))
@@ -59,7 +81,7 @@ def main():
     if manifest is not None:
         manifest, _notes = manifest_schema.migrate(manifest)
 
-    assets = [mesh, skeleton, rig.get_preview_mesh() if hasattr(rig, "get_preview_mesh") else None]
+    assets = [mesh, skeleton, rig.get_preview_mesh() if rig and hasattr(rig, "get_preview_mesh") else None]
     if CLIP_PATH:
         clip_paths = [CLIP_PATH]
     elif ALL_CLIPS:
@@ -70,10 +92,22 @@ def main():
         raise RuntimeError("No <base>.<clip>.anim.json found next to the rig FBX or in the repo's FBXs "
                            "folder. Export a clip from Maya (Animation tab), or set CLIP_PATH.")
 
+    skeleton_bones = set(builder.get_bone_names(skeleton))
     verdicts = []
     for clip_path in clip_paths:
         document = anim_import.load_clip(clip_path)
         folder = os.path.dirname(clip_path)
+        clip_joints = set(document.get("joints") or {})
+        missing = sorted(clip_joints - skeleton_bones)
+        if len(missing) * 2 > len(clip_joints):
+            # Another rig's clip in the same folder (e.g. V06 clips beside a V010 skeleton).
+            unreal.log_warning(f"[AnimImport] {os.path.basename(clip_path)}: made for another skeleton "
+                               f"({len(missing)} of {len(clip_joints)} joints not in {skeleton.get_name()}), "
+                               "skipped.")
+            continue
+        if missing:
+            unreal.log_warning(f"[AnimImport] {os.path.basename(clip_path)}: {len(missing)} joint(s) not in "
+                               f"the skeleton: {', '.join(missing[:8])}")
         fbx_name = document.get("fbx_file")
         if not fbx_name or not os.path.isfile(os.path.join(folder, fbx_name)):
             unreal.log_warning(f"[AnimImport] {os.path.basename(clip_path)}: no baked FBX beside it, skipped "

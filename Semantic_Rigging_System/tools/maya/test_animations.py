@@ -13,13 +13,16 @@ Clips (frames 0-48 at the scene rate):
 * ``ikfk_switch`` -- arms keyed in IK and FK; the switch goes IK -> FK
                      between frames 20 and 28.
 * ``spine``       -- pelvis, spine and chest rotations and translations.
-* ``world``       -- world_ctrl (not rebuilt in Unreal) moves and turns,
+* ``world``       -- the world control (not rebuilt in Unreal) moves and turns,
                      plus a few FK keys.
 * ``stress``      -- a 360 degree head spin, a sub-frame key, a non-default
                      rotate order, weighted and stepped tangents, an anim
                      layer, and a keyed face slider.
 
 Only time-based curves are touched: the rig's driven keys stay as they are.
+
+The same clips exist for Murakami V06 (tagged rig) and V010 (built with the
+Jeffy toolkit): :data:`CASTS` names, per rig, the controls each clip keys.
 """
 
 import random
@@ -36,8 +39,49 @@ KEY_FRAMES = (0, 12, 24, 36, 48)
 SEED = 11
 TEST_LAYER = "kotsudo_test_layer"
 
+# Per rig, the controls the clips key (missing ones are skipped).
+CASTS = {
+    "v06": {
+        "fk_limbs": ["{}_{}FKctrl_0{}".format(s, part, i) for s in "LR" for part in ("Arm", "Leg") for i in (1, 2, 3)],
+        "fk_body": ["neck_ctrl_01", "neck_ctrl_03", "head_ctrl", "chest_ctrl", "spine_ctrl_01"],
+        "arm_ik": ["L_ArmIKctrl", "R_ArmIKctrl"],
+        "spine": ["Pelvis_IKctrl", "spine_ctrl_01", "chest_ctrl"],
+        "world": "world_ctrl",
+        "world_extra": ["L_ArmFKctrl_01", "R_LegFKctrl_01", "head_ctrl"],
+        "head": "head_ctrl",
+        "chest": "chest_ctrl",
+        "arm_fk": "L_ArmFKctrl_01",
+        "slider": ("Head_Settings_Ctrl", "Petal_Rotation"),
+        "neck": "neck_ctrl_01",
+    },
+    "jeffy": {      # Murakami V010
+        "fk_limbs": ["{}_{}Leaf{}FK_CTL".format(s, part, i) for s in "LR" for part in ("Arm", "Leg") for i in (1, 2, 3)],
+        "fk_body": ["C_Spine6FK_CTL", "C_Spine8FK_CTL", "C_HeadFK_CTL", "C_spineFK3_CTL", "C_spineFK1_CTL"],
+        "arm_ik": ["L_ArmLeaf1IK_CTL", "R_ArmLeaf1IK_CTL"],
+        "spine": ["C_spineCog_CTL", "C_spineFK2_CTL", "C_spineChestIk_CTL"],
+        "world": "C_global_CTL",
+        "world_extra": ["L_ArmLeaf1FK_CTL", "R_LegLeaf1FK_CTL", "C_HeadFK_CTL"],
+        "head": "C_HeadFK_CTL",
+        "chest": "C_spineChestIk_CTL",
+        "arm_fk": "L_ArmLeaf1FK_CTL",
+        "slider": ("C_Spine5IK3_CTL", "Smile"),
+        "neck": "C_Spine6FK_CTL",
+    },
+}
+
 _ROTATE = ("rotateX", "rotateY", "rotateZ")
 _TRANSLATE = ("translateX", "translateY", "translateZ")
+
+
+def rig_cast():
+    """The :data:`CASTS` entry of the open rig."""
+    try:
+        import jeffy_reader
+        if jeffy_reader.is_jeffy_rig():
+            return CASTS["jeffy"]
+    except ImportError:
+        pass
+    return CASTS["v06"]
 
 
 def _controls():
@@ -109,13 +153,13 @@ def make_clip(name):
     clear_animation()
     rng = random.Random("{}:{}".format(SEED, name))
     controls = _controls()
+    cast = rig_cast()
     unit = erm._maya_linear_to_centimeters_scale()     # cm per scene unit
-    fk_limbs = ["{}_{}FKctrl_0{}".format(s, part, i) for s in "LR" for part in ("Arm", "Leg") for i in (1, 2, 3)]
+    fk_limbs = cast["fk_limbs"]
 
     if name == "fk_body":
         _set_switches(controls, "fk")
-        for _, node in _existing(fk_limbs + ["neck_ctrl_01", "neck_ctrl_03", "head_ctrl",
-                                             "chest_ctrl", "spine_ctrl_01"], controls):
+        for _, node in _existing(fk_limbs + cast["fk_body"], controls):
             _key_random(rng, node, _ROTATE, 25.0)
 
     elif name == "ikfk_switch":
@@ -126,7 +170,7 @@ def make_clip(name):
             _key(switch["node"], switch["attribute"], 20, switch["ik"], tangent="linear")
             _key(switch["node"], switch["attribute"], 28, switch["fk"], tangent="linear")
             _key(switch["node"], switch["attribute"], 48, switch["fk"], tangent="linear")
-        for _, node in _existing(["L_ArmIKctrl", "R_ArmIKctrl"], controls):
+        for _, node in _existing(cast["arm_ik"], controls):
             _key_random(rng, node, _TRANSLATE, 8.0, unit=unit)
             _key_random(rng, node, _ROTATE, 20.0)
         for _, node in _existing([n for n in fk_limbs if "Arm" in n], controls):
@@ -134,15 +178,15 @@ def make_clip(name):
 
     elif name == "spine":
         _set_switches(controls, "fk")
-        for _, node in _existing(["Pelvis_IKctrl", "spine_ctrl_01", "chest_ctrl"], controls):
+        for _, node in _existing(cast["spine"], controls):
             _key_random(rng, node, _ROTATE, 20.0)
             _key_random(rng, node, _TRANSLATE, 4.0, unit=unit)
 
     elif name == "world":
         _set_switches(controls, "fk")
-        world = cmds.ls("world_ctrl", long=True) or []
+        world = cmds.ls(cast["world"], long=True) or []
         if not world:
-            raise RuntimeError("No world_ctrl in the scene.")
+            raise RuntimeError("No {} in the scene.".format(cast["world"]))
         _key(world[0], "translateX", 0, 0.0)
         _key(world[0], "translateX", 48, 60.0 / unit)
         _key(world[0], "translateZ", 0, 0.0)
@@ -150,16 +194,16 @@ def make_clip(name):
         _key(world[0], "translateZ", 48, 0.0)
         _key(world[0], "rotateY", 0, 0.0)
         _key(world[0], "rotateY", 48, 90.0)
-        for _, node in _existing(["L_ArmFKctrl_01", "R_LegFKctrl_01", "head_ctrl"], controls):
+        for _, node in _existing(cast["world_extra"], controls):
             _key_random(rng, node, _ROTATE, 20.0)
 
     elif name == "stress":
         _set_switches(controls, "fk")
-        head = controls.get("head_ctrl")
+        head = controls.get(cast["head"])
         if head:                                      # a full spin: Euler continuity
             _key(head, "rotateY", 0, 0.0, tangent="linear")
             _key(head, "rotateY", 48, 360.0, tangent="linear")
-        chest = controls.get("chest_ctrl")
+        chest = controls.get(cast["chest"])
         if chest:                                     # rotate order + sub-frame key
             _CHANGED_ROTATE_ORDERS.setdefault(chest, cmds.getAttr(chest + ".rotateOrder"))
             cmds.setAttr(chest + ".rotateOrder", 2)   # zxy
@@ -169,19 +213,20 @@ def make_clip(name):
             _key(chest, "rotateX", 0, 0.0)
             _key(chest, "rotateX", 30, 12.0)
             _key(chest, "rotateX", 48, 0.0)
-        arm = controls.get("L_ArmFKctrl_01")
+        arm = controls.get(cast["arm_fk"])
         if arm:                                       # weighted, moved tangents
             for frame, value in ((0, 0.0), (24, 40.0), (48, 0.0)):
                 _key(arm, "rotateZ", frame, value)
             cmds.keyTangent(arm, attribute="rotateZ", weightedTangents=True)
             cmds.keyTangent(arm, attribute="rotateZ", time=(24, 24), lock=False,
                             inAngle=20.0, outAngle=-35.0, inWeight=6.0, outWeight=14.0)
-        settings = controls.get("Head_Settings_Ctrl")
-        if settings and "Petal_Rotation" in _keyable(settings, ["Petal_Rotation"]):
-            _key(settings, "Petal_Rotation", 0, 0.0, tangent="step")
-            _key(settings, "Petal_Rotation", 16, 5.0, tangent="step")
-            _key(settings, "Petal_Rotation", 32, 2.0, tangent="step")
-        neck = controls.get("neck_ctrl_01")
+        slider_name, slider_attr = cast["slider"]
+        settings = controls.get(slider_name)
+        if settings and slider_attr in _keyable(settings, [slider_attr]):
+            _key(settings, slider_attr, 0, 0.0, tangent="step")
+            _key(settings, slider_attr, 16, 5.0, tangent="step")
+            _key(settings, slider_attr, 32, 2.0, tangent="step")
+        neck = controls.get(cast["neck"])
         if neck:                                      # base keys + an additive layer
             _key(neck, "rotateZ", 0, 0.0)
             _key(neck, "rotateZ", 48, 10.0)

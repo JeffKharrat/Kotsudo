@@ -1,8 +1,29 @@
 # Murakami V010 (Jeffy rig): support plan
 
-Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). J1–J6 to
-do. Chosen over continuing the animation work on V06: the animation axes
-resume on V010 once it rebuilds in Unreal (phase J6).
+Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). **J1 Maya
+side built**; its Unreal run (baked clips on the V010 skeleton) is next.
+J2–J6 to do. Chosen over continuing the animation work on V06: the
+animation axes resume on V010 once it rebuilds in Unreal (phase J6).
+
+### J1 so far (Maya side)
+
+* The test clips (`tools/maya/test_animations.py`) exist for both rigs:
+  `CASTS` names, per rig, the controls each clip keys (V010: Jeffy names).
+* The Jeffy reader declares each setup's **IK/FK switch** in the manifest
+  as tagged rigs do (`params.switch`: the settings control's `ikFk`, 1 = IK,
+  0 = FK, measured on V010). The clips and the pose check now find the 5
+  switches (4 limbs, neck); test poses: 664.
+* `tests/maya_anim_export_test.py` on V010: all 5 clips exact against Maya
+  (samples 0.000000 cm, rest unchanged, Hermite rebuild ≤ 0.000002). The
+  global control `C_global_CTL` is an animator control on V010 (V06's
+  `world_ctrl` was not), so its keys are exported as such; the `Root`
+  joint carries the 60 cm world move.
+* `tests/maya_export_rig_and_clips.py` writes a rig and its 5 baked clips in
+  one folder: V010 → `FBXs/murakami_v010/`.
+* Unreal: `run_anim_import.py` takes the skeleton from a Skeletal Mesh
+  selected in the Content Browser when no Control Rig is open (the builder
+  has nothing to rebuild on V010 yet), and skips clips made for another
+  skeleton.
 
 ### J0 result (Maya test `tests/maya_jeffy_reader_test.py` on V010)
 
