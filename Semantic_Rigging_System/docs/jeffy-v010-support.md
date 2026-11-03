@@ -3,7 +3,43 @@
 Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). **J1
 built**: in Unreal, 4 of 5 V010 clips are T0 and 1 is T1 (better than V06),
 confirmed after the `Root` name fix (97 bones scored, `Root` included).
-J2–J6 to do. Chosen over continuing the animation work on V06: the
+**J2 built** (FK chains, spaces, `length`, rig base, face-slider wires);
+its Unreal build and pose check are next. J3–J6 to do.
+
+### J2: how the Jeffy setups reach the Unreal builder
+
+The Jeffy reader now describes the controls of `fk_chain` and `rig_base` as
+**standard Kotsudo controller records** (`bone_controllers`), so the
+existing FK, space and driven-group machinery rebuilds them:
+
+* **Bone = control.** Each joint copies its output, and an FK output is its
+  control's world matrix (`OUT_MM = CTL.world · Outputs_GRP⁻¹`), so the
+  control that places an output is that joint's `bone_driver`. `rig_base`:
+  `Root` copies `C_root_CTL`; `C_global_CTL` drives no joint.
+* **Parents.** The Jeffy controls above a control, up to its space group
+  (Kotsudo's own walk stopped at Jeffy's matrix-driven groups).
+* **Spaces.** The anchor's choice node (`space` enum → `offset · target.world`)
+  becomes a blended space: one target per space (an output → its joint, a
+  control → that control), weight = (`space` == i), and the control's pose
+  with each space alone, measured in Maya. Targets whose setup is not
+  rebuilt yet (cog, chest: J5) hold still, with a warning; the others
+  work.
+* **`length`.** The next control's zero group is placed by a composeMatrix
+  whose translate is `rest × length`: a driven offset group (mul op), which
+  the builder already rebuilds every frame. The attribute walker now
+  follows links made on a whole compound plug (`md.output →
+  compose.inputTranslate`).
+* **`globalScale`.** Scales the global control every evaluation (Set Scale);
+  everything under it follows, as in Maya.
+* **Face sliders.** The 4 `wire_attribute` setups are `remapValue` nodes
+  (0–10 → 0–1, clamped): the walker now reads a default-curve
+  `remapValue` as a clamped remap, and blendShapes driven by a Jeffy wire
+  count as registered. Their control `C_Spine5IK3_CTL` (a neck control,
+  J5) is built as a settings control until then: its sliders work, it moves
+  no joint yet.
+* Unreal: `Jeffy.fk_chain` is the FK module on these records;
+  `Jeffy.rig_base` builds the global control, wires `globalScale`, then the
+  root control and `Root` (solve stage "spaces", built first). Chosen over continuing the animation work on V06: the
 animation axes resume on V010 once it rebuilds in Unreal (phase J6).
 
 ### J1 so far (Maya side)

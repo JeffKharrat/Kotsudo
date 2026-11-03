@@ -256,6 +256,13 @@ class RigContext:
         for target in blend.get("targets") or []:
             key = self._space_target_key(target)
             weight = target.get("weight") or {"value": 1.0}
+            if key is None and blend.get("missing_targets") == "static" and target.get("solo"):
+                # (Jeffy rigs) the target's setup is not rebuilt yet: that
+                # space holds still where Maya puts the control at rest, and
+                # the other spaces keep working.
+                self._warn(f"Space target '{target.get('controller') or target.get('bone')}' of '{name}' "
+                           "is not in the rig yet; that space holds still.")
+                key = "world"
             if key is None:
                 return fallback(f"target '{target.get('controller') or target.get('bone') or target.get('node')}'"
                                 " is not in the rig")

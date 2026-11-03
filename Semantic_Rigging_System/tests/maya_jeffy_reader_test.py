@@ -37,6 +37,7 @@ import maya.cmds as cmds  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools", "maya"))
+sys.path.insert(0, os.path.join(HERE, ".."))
 import export_animation as ea  # noqa: E402
 import export_rig_manifest as erm  # noqa: E402
 import export_test_poses as etp  # noqa: E402
@@ -58,6 +59,119 @@ def q_angle(a, b):
     dot = min(1.0, abs(sum(x * y for x, y in zip(a, b))) / (
         math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))))
     return math.degrees(2.0 * math.acos(dot))
+
+
+def apply_ops(value, ops):
+    """The exporter's driver maths, in python (the ops J2 uses)."""
+    for op in ops or []:
+        kind = op["op"]
+        if kind == "mul":
+            value *= op["value"]
+        elif kind == "add":
+            value += op["value"]
+        elif kind == "remap":
+            (a, b), (c, d) = op["from"], op["to"]
+            t = min(1.0, max(0.0, (value - a) / (b - a))) if b != a else 0.0
+            value = c + t * (d - c)
+        elif kind == "compare":
+            value = op["true"] if abs(value - op["value"]) < 1e-9 else op["false"]
+        else:
+            raise ValueError(kind)
+    return value
+
+
+def check_j2(setups, manifest):
+    """J2: the fk_chain / rig_base controls as standard Kotsudo records
+    (parents, space switches, driven groups) and the face-slider wires as
+    blendshape drivers -- what the Unreal builder rebuilds."""
+    from rig_builder import driven_groups as dg
+    from rig_builder import manifest_schema
+
+    print("\n-- J2 records --")
+    described = [s for s in setups if s["type"] in jeffy_reader.DESCRIBED_TYPES]
+    records = {r["name"]: r for rs in (manifest.get("bone_controllers") or {}).values() for r in rs}
+    expected = sum(len(s["controls"]) for s in described)
+    print("records: {} (expected {})".format(len(records), expected))
+    check(len(records) == expected, "bone_controllers holds {} records, expected {}".format(len(records), expected))
+
+    errors, warnings = manifest_schema.validate_manifest(manifest)
+    print("manifest validation: {} error(s), {} warning(s)".format(len(errors), len(warnings)))
+    check(not errors, "manifest errors: {}".format(errors[:3]))
+
+    # FK chains: the top control switches space, the others hang from the previous control.
+    fk = [s for s in setups if s["type"] == "fk_chain"]
+    blends = 0
+    for setup in fk:
+        names = [c["name"] for c in setup["controls"]]
+        top = records.get(names[0]) or {}
+        blend = top.get("parent_space_blend") or {}
+        if check(blend, "{}: no space switch".format(names[0])):
+            blends += 1
+            targets = blend["targets"]
+            check(all(t.get("solo") for t in targets) and len(blend["switch"]["labels"]) == len(targets),
+                  "{}: space targets incomplete".format(names[0]))
+            check(blend["switch"]["labels"][0] == "parent", "{}: first space {}".format(
+                names[0], blend["switch"]["labels"][0]))
+        check(top.get("role") == "bone_driver", "{}: role {}".format(names[0], top.get("role")))
+        for previous, name in zip(names, names[1:]):
+            check((records.get(name) or {}).get("parent_controllers") == [previous],
+                  "{}: parents {}".format(name, (records.get(name) or {}).get("parent_controllers")))
+    print("fk chains: {}, space switches: {}".format(len(fk), blends))
+
+    # rig_base: the root control drives the root joint, under the global control.
+    base = next(s for s in setups if s["type"] == "rig_base")
+    by_key = {c["key"]: records.get(c["name"]) or {} for c in base["controls"]}
+    check(by_key["root"].get("role") == "bone_driver" and str(by_key["root"].get("driven_bone")).endswith("Root"),
+          "rig_base root control: {} {}".format(by_key["root"].get("role"), by_key["root"].get("driven_bone")))
+    check(by_key["root"].get("parent_controllers") == [base["controls"][0]["name"]],
+          "rig_base root parents {}".format(by_key["root"].get("parent_controllers")))
+
+    # length: a driven group on the next control; the Unreal maths vs Maya.
+    driven = [(r, g) for r in records.values() for g in r.get("offset_stack") or [] if g.get("kind") == "driven"]
+    print("driven groups (length):", len(driven))
+    check(len(driven) == sum(1 for s in fk if len(s["controls"]) > 1), "driven groups: {}".format(len(driven)))
+    worst_p = worst_r = 0.0
+    for record, group in driven[:4]:
+        node = cmds.ls(group["name"], long=True)[0]
+        driver = next(iter(group["driven"].values()))
+        plug = "{}.{}".format(driver["control"], driver["attr"])
+        previous = cmds.getAttr(plug)
+        for value in (0.4, 1.7):
+            cmds.setAttr(plug, value)
+            values = dict(group["rest"])
+            for channel, d in group["driven"].items():
+                values[channel] = apply_ops(value, d["ops"])
+            predicted = dg.compose(dg.compose(dg.local_unreal(group, values),
+                                              dg.inverse(dg.local_unreal(group, group["rest"]))),
+                                   dg.pose_to_transform(group["rest_world"]))
+            actual = dg.pose_to_transform(erm._world_pose_unreal(node))
+            worst_p = max(worst_p, math.dist(predicted[1], actual[1]))
+            worst_r = max(worst_r, q_angle(predicted[0], actual[0]))
+        cmds.setAttr(plug, previous)
+    print("driven group maths vs Maya: {:.6f} cm, {:.5f} deg".format(worst_p, worst_r))
+    check(worst_p < 1e-3 and worst_r < 1e-3, "driven group maths off ({:.4f} cm)".format(worst_p))
+
+    # Face sliders: the wires as blendshape drivers, their control as a settings control.
+    wires = [s for s in setups if s["type"] == "wire_attribute"]
+    entries = {e["target"]: e for e in manifest.get("blendshapes") or []}
+    for wire in wires:
+        target = str(wire["slots"]["targets"][0]).split(".")[-1]
+        entry = entries.get(target) or {}
+        source = str(wire["slots"]["source"])
+        ok = (entry.get("driver") or {}).get("control") == source.split(".")[0] and not entry.get("unsupported")
+        check(ok, "wire {} -> {}: {}".format(source, target, entry.get("unsupported") or entry.get("driver")))
+        if ok:
+            control, attribute = source.split(".")
+            for value in (0.0, 2.5, 7.5, 10.0):         # the slider's range (0-10)
+                cmds.setAttr(source, value)
+                weight = cmds.getAttr(wire["slots"]["targets"][0])
+                predicted = apply_ops(value, entry["driver"].get("ops") or entry.get("ops") or [])
+                check(abs(weight - predicted) < 1e-4, "wire {} at {}: Maya {} vs {}".format(
+                    target, value, weight, predicted))
+            cmds.setAttr(source, 0.0)
+    settings = [r["name"] for r in manifest.get("settings_controls") or []]
+    print("blendshape drivers: {}, settings controls: {}".format(len(entries), settings))
+    check(len(entries) >= len(wires), "blendshape entries {}".format(len(entries)))
 
 
 def main():
@@ -105,7 +219,10 @@ def main():
     graph = erm.analyze_module_graph(tool_modules)
     statuses = collections.Counter(rig_tagger_tool.validate_module(m, graph)[0] for m in tool_modules)
     print("tool statuses:", dict(statuses))
-    check(set(statuses) == {"orange"}, "tool statuses {}".format(dict(statuses)))
+    supported = sum(1 for m in tool_modules
+                    if m["module_type"][len(jeffy_reader.MODULE_PREFIX):] in jeffy_reader.UNREAL_SUPPORTED_TYPES)
+    check(statuses.get("green", 0) == supported and statuses.get("orange", 0) == len(tool_modules) - supported,
+          "tool statuses {} ({} supported)".format(dict(statuses), supported))
 
     # -- full export ---------------------------------------------------------------
     cmds.loadPlugin("fbxmaya", quiet=True)
@@ -126,6 +243,8 @@ def main():
     poses = (erm.LAST_EXPORT_SUMMARY.get("poses") or {})
     check(poses.get("count", 0) > 100, "test poses: {}".format(poses))
     check(os.path.isfile(fbx), "FBX written")
+
+    check_j2(setups, manifest)
 
     # -- an animation clip on Jeffy controls -----------------------------------------------
     rng = random.Random(5)

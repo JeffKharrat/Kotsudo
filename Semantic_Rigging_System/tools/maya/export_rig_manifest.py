@@ -1298,10 +1298,42 @@ _MD_OPERATIONS = {0: None, 1: 'mul', 2: 'div', 3: 'pow'}
 
 
 def _source_plug(plug):
-    """The plug connected into ``plug`` (unit conversions kept), or None."""
+    """The plug connected into ``plug`` (unit conversions kept), or None.
+
+    A child of a compound plug connected as a whole (``md.output`` ->
+    ``compose.inputTranslate``) gives the matching child of the source
+    (``md.outputX`` for ``compose.inputTranslateX``)."""
     sources = cmds.listConnections(plug, source=True, destination=False, plugs=True,
                                    skipConversionNodes=False) or []
-    return sources[0] if sources else None
+    if sources:
+        return sources[0]
+    return _compound_child_source(plug)
+
+
+def _compound_child_source(plug):
+    node, _, attribute = plug.partition('.')
+    if not attribute or '.' in attribute or '[' in attribute:
+        return None
+    try:
+        parents = cmds.attributeQuery(attribute, node=node, listParent=True) or []
+    except Exception:
+        return None
+    if not parents:
+        return None
+    sources = cmds.listConnections('{}.{}'.format(node, parents[0]), source=True, destination=False,
+                                   plugs=True, skipConversionNodes=False) or []
+    if not sources:
+        return None
+    children = cmds.attributeQuery(parents[0], node=node, listChildren=True) or []
+    source_node, _, source_attribute = sources[0].partition('.')
+    try:
+        source_children = cmds.attributeQuery(source_attribute.split('[')[0], node=source_node,
+                                              listChildren=True) or []
+    except Exception:
+        return None
+    if attribute not in children or len(source_children) != len(children):
+        return None
+    return '{}.{}'.format(source_node, source_children[children.index(attribute)])
 
 
 _COMPARE_TESTS = {0: 'eq', 1: 'ne', 2: 'gt', 3: 'ge', 4: 'lt', 5: 'le'}
@@ -1454,6 +1486,25 @@ def _attribute_driver(plug, depth=0):
         return follow('{}.value{}'.format(node, axis),
                       [{'op': 'remap', 'from': [old_min, old_max], 'to': [new_min, new_max]}])
 
+    if kind == 'remapValue' and attribute.startswith('outValue'):
+        # Supported when its curve is the default straight line from (0, 0)
+        # to (1, 1): a clamped linear remap (the ramp holds its end values
+        # outside the input range). The Jeffy wires are built that way.
+        limits = [node + '.' + name for name in ('inputMin', 'inputMax', 'outputMin', 'outputMax')]
+        if any(connected(pl) for pl in limits):
+            return None, None, 'remapValue with driven limits'
+        points = []
+        for index in cmds.getAttr(node + '.value', multiIndices=True) or []:
+            base = '{}.value[{}]'.format(node, index)
+            points.append((round(float(cmds.getAttr(base + '.value_Position')), 6),
+                           round(float(cmds.getAttr(base + '.value_FloatValue')), 6),
+                           int(cmds.getAttr(base + '.value_Interp'))))
+        points.sort()
+        if [(p, v) for p, v, _ in points] != [(0.0, 0.0), (1.0, 1.0)] or points[0][2] != 1:
+            return None, None, 'remapValue with a custom curve'
+        in_min, in_max, out_min, out_max = (float(cmds.getAttr(pl)) for pl in limits)
+        return follow(node + '.inputValue', [{'op': 'remap', 'from': [in_min, in_max], 'to': [out_min, out_max]}])
+
     if kind.startswith('animCurveU'):
         times = cmds.keyframe(node, query=True, floatChange=True) or []
         values = cmds.keyframe(node, query=True, valueChange=True) or []
@@ -1476,8 +1527,16 @@ _blendshape_driver = _attribute_driver     # former name, kept for callers
 
 
 def blendshape_registered(blendshape):
+    """Registered in the tool; a blendShape a Jeffy wire setup drives counts
+    as registered until the tool says otherwise (the rig declares it)."""
     plug = '{}.{}'.format(blendshape, BLENDSHAPE_EXPORT_ATTR)
-    return bool(cmds.objExists(plug) and cmds.getAttr(plug))
+    if cmds.objExists(plug):
+        return bool(cmds.getAttr(plug))
+    try:
+        import jeffy_reader
+        return blendshape in jeffy_reader.wired_blendshapes()
+    except ImportError:
+        return False
 
 
 def set_blendshape_registered(blendshape, registered):
@@ -2100,6 +2159,12 @@ def collect_bone_controller_manifest(modules_config):
         if not chain:
             continue
         module_name = module.get('module_name') or ''
+        if module.get('source') == 'jeffy':
+            # The Jeffy reader knows each setup's controls, parents and spaces.
+            import jeffy_reader
+            for bone, snapshot in jeffy_reader.bone_controller_entries(module):
+                _append(bone, snapshot)
+            continue
 
         def _neighbour(index):
             """Bone used to cross-check axis/unit mapping (next, else previous)."""

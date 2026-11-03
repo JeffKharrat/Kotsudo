@@ -21,6 +21,7 @@ from .metadata_reader import (
 from .modules.fk_module import FKModule
 from .modules.ik_module import IKModule
 from .modules.ikfk_module import IKFKModule
+from .modules.jeffy_modules import JeffyFKChainModule, JeffyRigBaseModule
 from .modules.rig_module import RigModule
 from .modules.spline_ik_module import SplineIKModule
 
@@ -46,6 +47,9 @@ MODULE_REGISTRY = {
     "IKLimb": IKModule,
     "IKFKSwitch": IKFKModule,
     "SplineIK": SplineIKModule,
+    # Rigs built with the Jeffy toolkit (docs/jeffy-v010-support.md).
+    "Jeffy.rig_base": JeffyRigBaseModule,
+    "Jeffy.fk_chain": JeffyFKChainModule,
 }
 
 
@@ -131,7 +135,9 @@ SOLVE_STAGES = ("spaces", "primary", "helpers", "dynamics", "curves")
 # does not overwrite IK-solved bones.
 # IKFKSwitch runs after IKLimb because it internally runs the same IK solve pass.
 MODULE_BUILD_ORDER = {
+    "Jeffy.rig_base": -1,      # its controls are space targets of everything else
     "FKChain": 0,
+    "Jeffy.fk_chain": 0,
     "IKLimb": 1,
     "IKFKSwitch": 2,
     "SplineIK": 3,

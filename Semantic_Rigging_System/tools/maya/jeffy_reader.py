@@ -41,8 +41,12 @@ OUTPUT_JOINT_ATTR = "jeffyJoint"
 MODULE_PREFIX = "Jeffy."
 #: setup versions this reader was written against (others are read, and reported)
 KNOWN_VERSIONS = {1}
-#: Jeffy setup types the Unreal builder rebuilds (filled phase by phase, J2-J5)
-UNREAL_SUPPORTED_TYPES = set()
+#: Jeffy setup types the Unreal builder rebuilds (filled phase by phase, J2-J5).
+#: Their controls are described as standard Kotsudo controller records
+#: (``bone_controllers``: parents, spaces, driven groups); ``wire_attribute``
+#: goes through the blendshape export.
+UNREAL_SUPPORTED_TYPES = {"fk_chain", "rig_base", "wire_attribute"}
+DESCRIBED_TYPES = ("fk_chain", "rig_base")
 #: IK/FK switch: the ``ikFk`` attribute of a setup's ``settings`` control
 #: (1 = IK, 0 = FK; measured on V010: at 0 only the FK controls move the joints)
 SWITCH_ATTR = "ikFk"
@@ -247,6 +251,266 @@ def _switch_params(setup, joints):
     return {}
 
 
+def wired_blendshapes():
+    """blendShape nodes a ``wire_attribute`` setup drives."""
+    nodes = set()
+    for tag in setup_nodes():
+        if _string(tag, TYPE_ATTR) != "wire_attribute":
+            continue
+        for target in (_json(tag, "slots", {}) or {}).get("targets") or []:
+            nodes.add(str(target).split(".")[0])
+    return nodes
+
+
+# ---------------------------------------------------------------------------
+# Controller records (Kotsudo terms) for the Unreal builder
+# ---------------------------------------------------------------------------
+
+class _Index:
+    """Lookups over every setup: controls, space groups, outputs."""
+
+    def __init__(self, setups):
+        self.setups = setups
+        self.controls = {}       # long name -> (setup, control)
+        self.space_groups = {}   # long name of an anchor's zero group -> (setup, anchor)
+        for setup in setups:
+            for control in setup["controls"]:
+                self.controls[_long(control["node"])] = (setup, control)
+            for anchor in setup["anchors"]:
+                if anchor.get("zero") and anchor.get("attr"):
+                    self.space_groups[_long(anchor["zero"])] = (setup, anchor)
+
+
+def _parent(node):
+    return (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+
+
+def _matrix_sources(plug):
+    return cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
+
+
+def _source_control(node, index, depth=0):
+    """The Jeffy control whose world matrix places ``node`` (an output),
+    through multMatrix nodes and offsetParentMatrix inputs, or None."""
+    if depth > 12:
+        return None
+    plugs = ["{}.offsetParentMatrix".format(node)] if cmds.attributeQuery(
+        "offsetParentMatrix", node=node, exists=True) else []
+    if cmds.nodeType(node) == "multMatrix":
+        plugs = ["{}.matrixIn[{}]".format(node, i) for i in cmds.getAttr(node + ".matrixIn", multiIndices=True) or []]
+    for plug in plugs:
+        for source in _matrix_sources(plug):
+            source_node, _, attribute = source.partition(".")
+            long_name = _long(source_node)
+            if long_name in index.controls and attribute.startswith("worldMatrix"):
+                return long_name
+            if cmds.nodeType(source_node) == "multMatrix" or attribute.startswith("worldMatrix"):
+                found = _source_control(source_node, index, depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def _record_role(setup, control, index):
+    """(Kotsudo role, driven bone): a control that places an output drives
+    that output's joint ('bone_driver'); the others keep their Jeffy key."""
+    node = _long(control["node"])
+    for output in setup["outputs"]:
+        if output.get("joint") and _source_control(output["node"], index) == node:
+            return "bone_driver", output["joint"]
+    return control.get("key") or "control", None
+
+
+def _space_target(node, index):
+    """What a space target follows in the rebuilt rig."""
+    long_name = _long(node)
+    if long_name in index.controls:
+        return {"controller": _short(long_name)}
+    if cmds.attributeQuery(OUTPUT_JOINT_ATTR, node=node, exists=True):
+        joints = cmds.listConnections("{}.{}".format(node, OUTPUT_JOINT_ATTR), source=True,
+                                      destination=False) or []
+        if joints:
+            return {"bone": _short(joints[0])}
+    return {"world": True}
+
+
+def _space_blend(control_node, anchor, index):
+    """The anchor's space switch in Kotsudo's blended-space form: one target
+    per space (``offset x target.world``, picked by the enum through a choice
+    node), weight = (enum == space), and per space the pose Maya gives the
+    control with that space alone ('solo'). Returns (blend, reason)."""
+    import export_rig_manifest as erm
+
+    attribute = anchor["attr"]
+    plug = "{}.{}".format(control_node, attribute)
+    choices = [c for c in (cmds.listConnections(plug, source=False, destination=True, type="choice") or [])]
+    if len(set(choices)) != 1:
+        return None, "{} drives {} choice node(s)".format(plug, len(set(choices)))
+    choice = choices[0]
+    targets = []
+    for i in cmds.getAttr(choice + ".input", multiIndices=True) or []:
+        target_node = None
+        for source in _matrix_sources("{}.input[{}]".format(choice, i)):
+            mult = source.partition(".")[0]
+            if cmds.nodeType(mult) != "multMatrix":
+                continue
+            for j in cmds.getAttr(mult + ".matrixIn", multiIndices=True) or []:
+                for matrix in _matrix_sources("{}.matrixIn[{}]".format(mult, j)):
+                    if matrix.partition(".")[2].startswith("worldMatrix"):
+                        target_node = matrix.partition(".")[0]
+        if target_node is None:
+            return None, "space {} of {} has no target".format(i, plug)
+        target = _space_target(target_node, index)
+        target.update({"node": _short(target_node), "index": i,
+                       "weight": {"control": _short(control_node), "attr": attribute,
+                                  "ops": [{"op": "compare", "test": "eq", "value": float(i),
+                                           "true": 1.0, "false": 0.0}]}})
+        targets.append(target)
+    blend = {"kind": anchor.get("kind") or "parent", "group": _short(anchor.get("zero")),
+             "constraint": _short(choice), "targets": targets, "source": "jeffy",
+             # A target whose setup is not rebuilt yet holds its space still.
+             "missing_targets": "static",
+             "rest": erm._world_pose_unreal(control_node)}
+    previous = cmds.getAttr(plug)
+    try:
+        for target in targets:
+            cmds.setAttr(plug, target["index"])
+            target["solo"] = erm._world_pose_unreal(control_node)
+    finally:
+        cmds.setAttr(plug, previous)
+    labels = {value: label for label, value in erm.enum_entries(_short(control_node), attribute)}
+    blend["switch"] = {"control": _short(control_node), "attr": attribute,
+                       "values": [float(t["index"]) for t in targets],
+                       "labels": [labels.get(float(t["index"]), "?") for t in targets]}
+    return blend, None
+
+
+_COMPOSE_INPUTS = {"translate" + a: "inputTranslate" + a for a in "XYZ"}
+_COMPOSE_INPUTS.update({"rotate" + a: "inputRotate" + a for a in "XYZ"})
+
+
+def _compose_group_entry(group, compose):
+    """An offset group placed by a composeMatrix (offsetParentMatrix): a
+    driven group when attributes feed the compose inputs (``length``
+    scaling the next control's offset), else static."""
+    import export_rig_manifest as erm
+
+    entry = {"name": _short(group), "node_type": cmds.nodeType(group), "kind": "static"}
+    driven, problems = {}, []
+    for channel, compose_input in _COMPOSE_INPUTS.items():
+        plug = "{}.{}".format(compose, compose_input)
+        if erm._source_plug(plug) is None:
+            continue
+        control, attribute, ops = erm._attribute_driver(plug)
+        if control is None:
+            problems.append("{}: {}".format(channel, ops))
+        else:
+            driven[channel] = {"control": control, "attr": attribute, "ops": ops}
+    for other in ("inputScale", "inputQuat", "inputShear", "inputRotateOrder"):
+        if _matrix_sources("{}.{}".format(compose, other)):
+            problems.append("{}.{} is driven (not transferred)".format(_short(compose), other))
+    if any(abs(c) > 1e-9 for c in cmds.getAttr(group + ".translate")[0] + cmds.getAttr(group + ".rotate")[0]):
+        problems.append("its own translate/rotate are not zero (not transferred)")
+    if not driven and not problems:
+        return entry
+    entry.update({"kind": "driven", "driven": driven, "problems": problems,
+                  "rest_world": erm._world_pose_unreal(group),
+                  "rest": {c: float(cmds.getAttr("{}.{}".format(compose, i))) for c, i in _COMPOSE_INPUTS.items()},
+                  "rotate_order": erm._ROTATE_ORDERS[cmds.getAttr(compose + ".inputRotateOrder")],
+                  "rotate_axis": [0.0, 0.0, 0.0], "joint_orient": [0.0, 0.0, 0.0],
+                  "axes_unreal": {a: erm._maya_vector_to_unreal(v, apply_unit_scale=False)
+                                  for a, v in (("x", [1, 0, 0]), ("y", [0, 1, 0]), ("z", [0, 0, 1]))},
+                  "unit_scale": erm._maya_linear_to_centimeters_scale()})
+    if not driven:
+        entry["kind"] = "static"
+    return entry
+
+
+def _describe_hierarchy(record, node, index):
+    """Fill what the generic snapshot cannot see through Jeffy's matrix
+    groups: the parent controllers, the space switch and the groups."""
+    ancestors, current = [], _parent(node)
+    while current:
+        ancestors.append(current)
+        current = _parent(current)
+    # Parent controllers: the Jeffy controls above, up to a space group (a
+    # space replaces everything above it).
+    parents = []
+    space_group = None
+    for ancestor in ancestors:
+        if ancestor in index.space_groups:
+            space_group = ancestor
+            break
+        if ancestor in index.controls:
+            parents.append(_short(ancestor))
+    record["parent_controllers"] = parents
+    record["parent_controller"] = parents[0] if parents else None
+
+    by_short = {_short(a): a for a in ancestors}
+    stack = []
+    for entry in record.get("offset_stack") or []:
+        group = by_short.get(entry.get("name"))
+        if entry.get("kind") == "matrix" and group:
+            if group in index.space_groups:
+                entry = {"name": entry["name"], "node_type": entry.get("node_type"), "kind": "space"}
+            else:
+                sources = _matrix_sources(group + ".offsetParentMatrix")
+                compose = sources[0].partition(".")[0] if sources else None
+                if compose and cmds.nodeType(compose) == "composeMatrix":
+                    entry = _compose_group_entry(group, compose)
+        stack.append(entry)
+    record["offset_stack"] = stack
+
+    record.pop("parent_space_note", None)
+    record["parent_space_blend"] = None
+    if space_group and not parents:
+        setup, anchor = index.space_groups[space_group]
+        if anchor.get("control") and _long(anchor["control"]) == node:
+            blend, reason = _space_blend(node, anchor, index)
+            record["parent_space_blend"] = blend
+            if reason:
+                record["parent_space_note"] = reason
+            bones = [t["bone"] for t in (blend or {}).get("targets") or [] if t.get("bone")]
+            if bones:
+                record["parent_space_bone"] = bones[0]
+
+
+def control_record(setup, control, index):
+    """A Kotsudo controller record for one Jeffy control (the snapshot the
+    exporter makes for any controller, plus Jeffy's key, space role and
+    setup; for the described types, also parents, spaces and groups)."""
+    import export_rig_manifest as erm
+
+    name = module_name(setup)
+    node = _long(control["node"])
+    anchor = _anchor_bone(setup, control)
+    role, driven = (_record_role(setup, control, index) if setup["type"] in DESCRIBED_TYPES
+                    else (control.get("key") or "control", None))
+    snapshot = erm._query_transform_snapshot(node, role, name, driven or anchor, driven or anchor)
+    record = dict(snapshot or {"name": control["name"], "dag_path": node})
+    record.update({"jeffy_key": control.get("key"), "jeffy_space_role": control.get("space_role"),
+                   "jeffy_setup": name, "anchor_bone": _short(driven or anchor) if (driven or anchor) else None})
+    if setup["type"] in DESCRIBED_TYPES:
+        _describe_hierarchy(record, node, index)
+    return record
+
+
+def bone_controller_entries(module, setups=None):
+    """[(bone, controller record)] of a Jeffy module of a described type,
+    for the manifest's ``bone_controllers`` (keyed by the bone each control
+    drives, else the module's first bone)."""
+    setups = read_setups() if setups is None else setups
+    setup = next((s for s in setups if s["tag"] == module.get("jeffy_tag")), None)
+    if setup is None or setup["type"] not in DESCRIBED_TYPES:
+        return []
+    index = _Index(setups)
+    entries = []
+    for control in setup["controls"]:
+        record = control_record(setup, control, index)
+        entries.append((record.get("driven_bone") or module["chain"][0], record))
+    return entries
+
+
 def _anchor_bone(setup, control):
     """The bind joint a control is measured from: the joint of the output with
     the same index for FK controls (``fk2`` -> ``j2``), else the first one."""
@@ -281,21 +545,18 @@ def manifest_section(setups=None):
     import export_rig_manifest as erm
 
     setups = read_setups() if setups is None else setups
+    index = _Index(setups)
     section = {"setups": [], "notes": []}
     for setup in setups:
         name = module_name(setup)
         controls = []
         for control in setup["controls"]:
-            anchor = _anchor_bone(setup, control)
-            snapshot = None
             try:
-                snapshot = erm._query_transform_snapshot(
-                    control["node"], control.get("key") or "control", name, anchor, anchor)
+                record = control_record(setup, control, index)
             except Exception as exc:
                 section["notes"].append("{}: no controller snapshot ({})".format(control["name"], exc))
-            record = dict(snapshot or {"name": control["name"], "dag_path": control["node"]})
-            record.update({"jeffy_key": control.get("key"), "jeffy_space_role": control.get("space_role"),
-                           "jeffy_setup": name, "anchor_bone": _short(anchor) if anchor else None})
+                record = {"name": control["name"], "dag_path": control["node"], "jeffy_key": control.get("key"),
+                          "jeffy_setup": name}
             controls.append(record)
         section["setups"].append(_json_safe({
             "module_name": name,
