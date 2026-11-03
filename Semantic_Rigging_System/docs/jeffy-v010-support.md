@@ -1,8 +1,8 @@
 # Murakami V010 (Jeffy rig): support plan
 
-Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). **J1 Maya
-side built**; its Unreal run (baked clips on the V010 skeleton) is next.
-J2–J6 to do. Chosen over continuing the animation work on V06: the
+Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). **J1
+built**: in Unreal, 4 of 5 V010 clips are T0 and 1 is T1 (better than V06);
+a re-import after the `Root` name fix is to confirm. J2–J6 to do. Chosen over continuing the animation work on V06: the
 animation axes resume on V010 once it rebuilds in Unreal (phase J6).
 
 ### J1 so far (Maya side)
@@ -24,6 +24,34 @@ animation axes resume on V010 once it rebuilds in Unreal (phase J6).
   selected in the Content Browser when no Control Rig is open (the builder
   has nothing to rebuild on V010 yet), and skips clips made for another
   skeleton.
+
+### J1 in Unreal (first run, 2026-11-03)
+
+| Clip | Verdict | Worst (96 bones × 49 frames) |
+|---|---|---|
+| fk_body | T0 | 0.0013 cm / 0.0091° |
+| ikfk_switch | T0 | 0.0054 cm / 0.0084° |
+| spine | T0 | 0.0095 cm / 0.0003° |
+| stress | T1 | 0.0107 cm / 0.0008° |
+| world | T0 | 0.0020 cm / 0.0003° |
+
+V06 for comparison: fk_body T0 (0.0011 cm), world T1 (0.0486 cm, the
+rest-vs-bind leg offset). On V010 the world clip is T0: the matrix rig's rest
+pose is its bind pose. The largest errors sit at the end of the long arm
+chain (`L_ArmLeaf3` and its ribbon joints, ~0.01 cm on a 13 m character),
+with a first-frame offset of the same size in some clips; stress crosses
+the T0 line (0.01 cm) by 0.0007 cm. Not chased further: it is 1e-5 of the
+character's height.
+
+**Found and fixed: `Root` renamed `Root1` in Unreal.** V010's top group is
+called `ROOT` (it holds `SKELETON`, `GEO`, `Blendshapes`); the FBX keeps the
+meshes' parent groups, and Unreal's FBX importer compares names without
+case, so it renamed the joint `Root` to `Root1`. The baked check still
+passed (the bone is compared by name, and `Root` was simply left out), but a
+Control Rig needs the real name. The export now renames, for the export
+only, any mesh **or parent group** whose name matches a joint ignoring
+case (`ROOT` → `ROOT_Mesh`), and the FBX check after export flags names
+that differ only by case.
 
 ### J0 result (Maya test `tests/maya_jeffy_reader_test.py` on V010)
 

@@ -4261,8 +4261,9 @@ def verify_exported_fbx(fbx_path, manifest):
     """Read the written FBX back and check it against the manifest.
 
     Catches, at export time, everything that would otherwise surface in
-    Unreal as "Bone 'X' was not found": duplicate node names (FBX cannot keep
-    two nodes with one name) and manifest bones missing from the file.
+    Unreal as "Bone 'X' was not found": duplicate node names, ignoring case
+    (FBX cannot keep two nodes with one name) and manifest bones missing
+    from the file.
     Raises RuntimeError listing every problem found.
     """
     names = read_fbx_model_names(fbx_path)
@@ -4271,7 +4272,12 @@ def verify_exported_fbx(fbx_path, manifest):
         counts[name] = counts.get(name, 0) + 1
 
     problems = []
-    duplicates = sorted(n for n, c in counts.items() if c > 1)
+    # Unreal's FBX importer compares node names without case ("ROOT" vs
+    # "Root" is a clash: the joint gets renamed "Root1").
+    by_key = {}
+    for name in names:
+        by_key.setdefault(name.lower(), []).append(name)
+    duplicates = sorted(" / ".join(group) for group in by_key.values() if len(group) > 1)
     if duplicates:
         problems.append(
             "Duplicate node names in FBX (rename one of each pair): "
@@ -4887,30 +4893,43 @@ def export_skeleton_and_meshes_fbx(fbx_path, bake_range=None):
             "Duplicate joint names under '{}': {}".format(root_node, ", ".join(duplicate_joints))
         )
 
+    # The FBX also holds every parent group of the meshes (e.g. V010's top
+    # group "ROOT" above GEO), and Unreal's FBX importer compares names
+    # without case: group "ROOT" made it rename the joint "Root" to "Root1".
+    # So meshes and their parent groups are checked, case-insensitively.
+    joint_keys = {n.lower() for n in joint_names}
+    export_uuids = [cmds.ls(n, uuid=True)[0] for n in export_nodes]
+    mesh_nodes = [n for n in export_nodes if n != root_node]
+    candidates = []                         # meshes, then their parent groups (long names)
+    for mesh in mesh_nodes:
+        candidates.append(mesh)
+    for mesh in mesh_nodes + [root_node]:
+        parent = (cmds.listRelatives(mesh, parent=True, fullPath=True) or [None])[0]
+        while parent and parent not in candidates:
+            candidates.append(parent)
+            parent = (cmds.listRelatives(parent, parent=True, fullPath=True) or [None])[0]
+    candidate_keys = [_short_joint_name(n).lower() for n in candidates]
+    clashing = [cmds.ls(n, uuid=True)[0] for n, key in zip(candidates, candidate_keys)
+                if key in joint_keys or candidate_keys.count(key) > 1]
+
     renamed = []  # (uuid, original short name)
-    taken = set(joint_names) | {_short_joint_name(m) for m in mesh_transforms}
+    taken = joint_keys | set(candidate_keys)
     try:
-        for i, mesh in enumerate(list(export_nodes)):
-            if mesh == root_node:
-                continue
-            short = _short_joint_name(mesh)
-            if short not in joint_names and sum(
-                1 for m in mesh_transforms if _short_joint_name(m) == short
-            ) <= 1:
-                continue
+        for uuid in clashing:
+            node = cmds.ls(uuid, long=True)[0]
+            short = _short_joint_name(node)
             new_name = short + "_Mesh"
-            while new_name in taken:
+            while new_name.lower() in taken:
                 new_name += "_"
-            taken.add(new_name)
-            uuid = cmds.ls(mesh, uuid=True)[0]
-            new_path = cmds.rename(mesh, new_name)
+            taken.add(new_name.lower())
+            cmds.rename(node, new_name)
             renamed.append((uuid, short))
-            export_nodes[i] = cmds.ls(uuid, long=True)[0] if new_path else new_path
             print("[RigManifest] Renamed '{}' -> '{}' for export.".format(short, new_name))
+        export_nodes = [cmds.ls(uuid, long=True)[0] for uuid in export_uuids]
 
         export_fbx(fbx_path, export_nodes, bake_range=bake_range)
     finally:
-        for uuid, original in renamed:
+        for uuid, original in reversed(renamed):
             nodes = cmds.ls(uuid, long=True) or []
             if nodes:
                 cmds.rename(nodes[0], original)
