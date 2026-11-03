@@ -1,8 +1,9 @@
 # Murakami V010 (Jeffy rig): support plan
 
 Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). **J1
-built**: in Unreal, 4 of 5 V010 clips are T0 and 1 is T1 (better than V06);
-a re-import after the `Root` name fix is to confirm. J2–J6 to do. Chosen over continuing the animation work on V06: the
+built**: in Unreal, 4 of 5 V010 clips are T0 and 1 is T1 (better than V06),
+confirmed after the `Root` name fix (97 bones scored, `Root` included).
+J2–J6 to do. Chosen over continuing the animation work on V06: the
 animation axes resume on V010 once it rebuilds in Unreal (phase J6).
 
 ### J1 so far (Maya side)
@@ -51,7 +52,8 @@ passed (the bone is compared by name, and `Root` was simply left out), but a
 Control Rig needs the real name. The export now renames, for the export
 only, any mesh **or parent group** whose name matches a joint ignoring
 case (`ROOT` → `ROOT_Mesh`), and the FBX check after export flags names
-that differ only by case.
+that differ only by case. Re-imported and re-checked: the bone is `Root`,
+97 bones are scored (96 before: `Root` was missing), verdicts unchanged.
 
 ### J0 result (Maya test `tests/maya_jeffy_reader_test.py` on V010)
 
