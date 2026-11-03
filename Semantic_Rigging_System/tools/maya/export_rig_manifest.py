@@ -1249,11 +1249,38 @@ def _parent_space(node):
     return controllers, None
 
 
+def root_joint():
+    """Long name of the exported skeleton's top joint, or None.
+
+    ``root`` (ROOT_JOINT_NAME) when the scene has it; else the root joint a
+    rig tool declares (Jeffy's ``rig_base`` setup: ``Root`` on Murakami
+    V010); else a top-level joint named root in any case.
+    """
+    found = cmds.ls(ROOT_JOINT_NAME, long=True, type='joint') or []
+    if len(found) == 1:
+        return found[0]
+    try:
+        import jeffy_reader
+        declared = jeffy_reader.root_joint()
+    except ImportError:
+        declared = None
+    if declared:
+        return declared
+    tops = [j for j in cmds.ls(type='joint', long=True) or []
+            if j.count('|') == 1 and _short_node_name(j).lower() == ROOT_JOINT_NAME.lower()]
+    return tops[0] if len(tops) == 1 else None
+
+
+def manifest_plug():
+    """``<root joint>.rig_manifest_json`` (the root may not be named root)."""
+    return "{}.{}".format(root_joint() or ROOT_JOINT_NAME, MANIFEST_ATTR)
+
+
 def _exported_joints():
-    root = cmds.ls(ROOT_JOINT_NAME, long=True, type='joint') or []
+    root = root_joint()
     if not root:
         return []
-    return root + (cmds.listRelatives(root[0], allDescendents=True, type='joint', fullPath=True) or [])
+    return [root] + (cmds.listRelatives(root, allDescendents=True, type='joint', fullPath=True) or [])
 
 
 # ---------------------------------------------------------------------------
@@ -2851,7 +2878,9 @@ def _collect_chains_from_root(root_joint):
     chains = []
 
     def _walk(current, current_chain):
-        children = cmds.listRelatives(current, children=True, type='joint') or []
+        # Long names: a mesh may share a joint's short name (Murakami V010:
+        # mesh and joint both called Head).
+        children = cmds.listRelatives(current, children=True, type='joint', fullPath=True) or []
         current_chain.append(current)
         if len(children) == 0:
             chains.append(list(current_chain))
@@ -2917,8 +2946,8 @@ def run_detection_pipeline(root_joint=None):
     """
     if root_joint:
         root_joints = [root_joint]
-    elif cmds.objExists(ROOT_JOINT_NAME) and cmds.nodeType(ROOT_JOINT_NAME) == 'joint':
-        root_joints = [ROOT_JOINT_NAME]
+    elif root_joint():
+        root_joints = [root_joint()]
     else:
         root_joints = _get_scene_root_joints()
         # Remove the manifest root if it has no rig children.
@@ -2935,7 +2964,7 @@ def run_detection_pipeline(root_joint=None):
         all_chains.extend(_collect_chains_from_root(rj))
 
     # Filter out single-joint chains that are the manifest root itself.
-    all_chains = [c for c in all_chains if not (len(c) == 1 and c[0] == ROOT_JOINT_NAME)]
+    all_chains = [c for c in all_chains if not (len(c) == 1 and _short_joint_name(c[0]) == ROOT_JOINT_NAME)]
 
     claimed = set()   # joints already assigned to a module
     modules = []
@@ -3278,9 +3307,10 @@ def analyze_module_graph(modules_config):
             # A single untagged skeleton root is expected. A deeper untagged
             # joint region means the module can still build, but attachment is
             # not semantically certain, so expose it as orange in the tool.
+            root_name = _short_joint_name(root_joint() or ROOT_JOINT_NAME)
             meaningful = [
                 item for item in skipped_ancestors
-                if _short_joint_name(item) != ROOT_JOINT_NAME
+                if _short_joint_name(item) not in (ROOT_JOINT_NAME, root_name)
             ]
             if meaningful:
                 _append_graph_issue(
@@ -4048,7 +4078,7 @@ def build_manifest(rig_name, modules_config):
         dcc_version = cmds.about(version=True)
     except Exception:
         scene, dcc_version = "", ""
-    return {
+    manifest = {
         "schema": "kotsudo.rig",
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "rig_name": rig_name,
@@ -4079,6 +4109,15 @@ def build_manifest(rig_name, modules_config):
         "control_shapes": dict(_SHAPE_REGISTRY),
         "modules": modules,
     }
+    # A rig built with the Jeffy toolkit describes its own setups: carry that
+    # description (with Kotsudo controller snapshots of every Jeffy control).
+    if any(module.get("source") == "jeffy" for module in modules_config):
+        import jeffy_reader
+        manifest["jeffy"] = jeffy_reader.manifest_section()
+        manifest["source"]["rig_tool"] = "jeffy"
+        # Shapes registered while snapshotting the Jeffy controls.
+        manifest["control_shapes"] = dict(_SHAPE_REGISTRY)
+    return manifest
 
 
 # ---------------------------------------------------------------------------
@@ -4122,7 +4161,7 @@ def update_manifest(rig_name, modules_config):
     """
     manifest = build_manifest(rig_name, modules_config)
     compact_json = json.dumps(manifest, separators=(",", ":"))
-    write_manifest_to_joint(ROOT_JOINT_NAME, compact_json)
+    write_manifest_to_joint(root_joint() or ROOT_JOINT_NAME, compact_json)
     print("[RigManifest] Manifest updated.")
 
 
@@ -4793,7 +4832,7 @@ def export(export_dir, filename_base, rig_name, modules_config):
         manifest["shapes_dir"] = os.path.basename(shapes_dir)
     manifest["poses_file"] = "{}.poses.json".format(filename_base)
     compact_json = json.dumps(manifest, separators=(",", ":"))
-    write_manifest_to_joint(ROOT_JOINT_NAME, compact_json)
+    write_manifest_to_joint(root_joint() or ROOT_JOINT_NAME, compact_json)
 
     _restore_bind_pose(modules_config)
 
@@ -4826,8 +4865,7 @@ def export_skeleton_and_meshes_fbx(fbx_path, bake_range=None):
     clashes with a joint (or another mesh) are renamed for the export only.
     """
     mesh_transforms = collect_visible_mesh_transforms()
-    root_matches = cmds.ls(ROOT_JOINT_NAME, long=True, type="joint") or []
-    root_node = root_matches[0] if root_matches else ROOT_JOINT_NAME
+    root_node = root_joint() or ROOT_JOINT_NAME
     export_nodes = [root_node] + [m for m in mesh_transforms if m != root_node]
 
     # A mesh transform sharing a short name with a joint (e.g. mesh "Head" and

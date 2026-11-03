@@ -632,6 +632,16 @@ class RigBuilder:
             self.logger.log(
                 "[RigBuilder] Loaded {} module(s) from embedded manifest.".format(len(detected_modules))
             )
+            # Rigs built with the Jeffy toolkit: their setups are listed in the
+            # manifest, rebuilt here type by type (docs/jeffy-v010-support.md).
+            pending = {}
+            for m in manifest_modules:
+                module_type = str(m.get("module_type") or "")
+                if module_type.startswith("Jeffy.") and module_type not in self.module_registry:
+                    pending[module_type] = pending.get(module_type, 0) + 1
+            if pending:
+                self.warn("Jeffy setups not rebuilt yet (skipped): " + ", ".join(
+                    f"{count} {module_type[len('Jeffy.'):]}" for module_type, count in sorted(pending.items())))
 
         # Fallback: detect modules from per-bone ModuleType/ModuleName/Role attributes.
         if not detected_modules:

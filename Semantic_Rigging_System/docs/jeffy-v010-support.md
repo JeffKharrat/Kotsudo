@@ -1,8 +1,29 @@
 # Murakami V010 (Jeffy rig): support plan
 
-Status: **plan** (2026-11-03). Nothing built yet. Chosen over continuing the
-animation work on V06: the animation axes resume on V010 once it rebuilds in
-Unreal (phase J6).
+Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). J1–J6 to
+do. Chosen over continuing the animation work on V06: the animation axes
+resume on V010 once it rebuilds in Unreal (phase J6).
+
+### J0 result (Maya test `tests/maya_jeffy_reader_test.py` on V010)
+
+* 35 setups read (20 fk_chain, 4 ikfk_limb, 4 ribbon, 2 spline, 1 rig_base,
+  4 wire_attribute), 87 controls; root `Root` (from `rig_base`).
+* 31 modules (`Jeffy.<type>`, chain = driven joints in output order); the 4
+  wires stay in the manifest's `jeffy` section. No joint in two modules.
+* Full export: FBX verified, 78/78 control shapes, manifest valid with a
+  `jeffy` section (87 control records, each a Kotsudo controller snapshot);
+  the pose check finds all 87 controls; 663 test poses.
+* A clip keyed on Jeffy controls exports; its samples equal a fresh capture.
+* **Rig finding:** 6 skinned joints are driven by no setup and simply follow
+  their parent: `L/R_ArmLeaf4`, `L/R_Cheek` (helpers in V06 too) and
+  `L/R_LegLeaf4` (the foot, which had its own control `L_FootFKctrl` in V06).
+* The Unreal builder skips the Jeffy modules with one line ("Jeffy setups
+  not rebuilt yet") until J2–J5 add them.
+
+Code: `tools/maya/jeffy_reader.py`; `export_rig_manifest.root_joint()` /
+`manifest_plug()` (root no longer has to be named `root`); the auto-detection
+walk uses long names (mesh `Head` vs joint `Head`); the tagger tool's
+`scene_modules()` lists Jeffy setups when the scene has no Kotsudo tags.
 
 Sources: the scene `AutodeskMaya/Murakami_LightCharacter_V010.ma` (analysed
 in Maya 2026; it is saved in 2027) and the Jeffy toolkit's code

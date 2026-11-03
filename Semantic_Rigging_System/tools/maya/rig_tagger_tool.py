@@ -35,6 +35,7 @@ except ImportError:
 
 import export_rig_manifest as erm
 import export_animation as ea
+import jeffy_reader
 
 try:
     USER_ROLE = QtCore.Qt.UserRole
@@ -328,6 +329,15 @@ def untag_module(module_name):
 # Reading tags
 # ---------------------------------------------------------------------------
 
+def scene_modules():
+    """The modules the tool shows and exports: Kotsudo tags when the scene has
+    any, else the setups of a rig built with the Jeffy toolkit."""
+    tagged = read_all_tagged_modules()
+    if tagged or not jeffy_reader.is_jeffy_rig():
+        return tagged
+    return jeffy_reader.modules_config()
+
+
 def read_all_tagged_modules():
     """Read v1/v2 tags into the modules_config shape used by the exporter."""
     groups = {}
@@ -435,6 +445,16 @@ def validate_module(module_def, graph_analysis=None):
     if not chain:
         add("red", "module has no joints")
         return "red", "module has no joints"
+
+    if module_def.get("source") == "jeffy":
+        missing = [joint for joint in chain if not cmds.objExists(joint)]
+        if missing:
+            return "red", "Jeffy setup drives missing joint(s): {}".format(", ".join(_short_name(j) for j in missing))
+        setup_type = module_type[len(jeffy_reader.MODULE_PREFIX):]
+        if setup_type in jeffy_reader.UNREAL_SUPPORTED_TYPES:
+            return "green", "read from the Jeffy setup ({} joint(s))".format(len(chain))
+        return "orange", ("read from the Jeffy setup ({} joint(s)); exported, but the Unreal builder does not "
+                          "rebuild '{}' setups yet".format(len(chain), setup_type))
 
     module_types = module_def.get("_module_types", [])
     if len(module_types) > 1:
@@ -952,7 +972,7 @@ class RigTaggerWindow(QtWidgets.QDialog):
     def refresh_module_list(self):
         self._report = self._load_report()
         expanded_keys = self._expanded_keys()
-        modules_config = read_all_tagged_modules()
+        modules_config = scene_modules()
         graph = erm.analyze_module_graph(modules_config)
         self._last_modules = modules_config
         self._last_graph = graph
@@ -1540,7 +1560,7 @@ class RigTaggerWindow(QtWidgets.QDialog):
 
     def _analyze_scene(self, *args, quiet=False):
         """Run the analysis; returns it (None on failure)."""
-        modules_config = read_all_tagged_modules()
+        modules_config = scene_modules()
         rig_name = self._rig_name_field.text().strip() or "rig"
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
@@ -1713,7 +1733,7 @@ class RigTaggerWindow(QtWidgets.QDialog):
             self._on_export_field_edited()
 
     def _export(self):
-        modules_config = read_all_tagged_modules()
+        modules_config = scene_modules()
         if not modules_config:
             self._warn("No tagged modules found. Tag at least one module first.")
             return

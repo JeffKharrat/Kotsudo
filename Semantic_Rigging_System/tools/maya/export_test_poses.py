@@ -440,7 +440,7 @@ def export_from_scene(out_dir=None):
     modules or controls changed -- the manifest on the root joint must match
     the FBX Unreal built from.
     """
-    plug = "{}.{}".format(erm.ROOT_JOINT_NAME, erm.MANIFEST_ATTR)
+    plug = erm.manifest_plug()
     if not cmds.objExists(plug):
         raise RuntimeError("No manifest on '{}': run a full export first.".format(plug))
     manifest = json.loads(cmds.getAttr(plug))

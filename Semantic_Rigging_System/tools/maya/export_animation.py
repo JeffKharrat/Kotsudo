@@ -307,7 +307,7 @@ def rig_base_name(manifest):
 
 
 def manifest_from_scene():
-    plug = "{}.{}".format(erm.ROOT_JOINT_NAME, erm.MANIFEST_ATTR)
+    plug = erm.manifest_plug()
     if not cmds.objExists(plug):
         raise RuntimeError("No manifest on '{}': export the rig first.".format(plug))
     return json.loads(cmds.getAttr(plug))
