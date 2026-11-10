@@ -270,12 +270,24 @@ def _to_p(transform):
 # ---------------------------------------------------------------------------
 
 def find_poses_file(assets, file_name):
-    for directory in control_shapes._search_directories(assets):
-        if file_name:
+    """The rig's poses file: the manifest's name next to the FBX, else in a
+    sub-folder of the repo's FBXs folder (one folder per rig). A named file is
+    never swapped for another rig's poses; the newest file is only a fallback
+    when the manifest names none."""
+    directories = control_shapes._search_directories(assets)
+    if file_name:
+        for directory in directories:
             path = os.path.join(directory, file_name)
             if os.path.isfile(path):
                 return path
-    for directory in control_shapes._search_directories(assets):
+        fbx_dir = control_shapes._project_fbx_dir()
+        if os.path.isdir(fbx_dir):
+            for sub in sorted(os.listdir(fbx_dir)):
+                path = os.path.join(fbx_dir, sub, file_name)
+                if os.path.isfile(path):
+                    return path
+        return None
+    for directory in directories:
         candidates = sorted(
             (os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(".poses.json"))
             if os.path.isdir(directory) else [],
@@ -805,8 +817,10 @@ def run_after_build(rig_blueprint, assets, manifest):
     try:
         poses_path = find_poses_file(assets, (manifest or {}).get("poses_file"))
         if not poses_path:
-            _log("No <name>.poses.json next to the FBX: pose check skipped (re-export from Maya).")
+            name = (manifest or {}).get("poses_file") or "<name>.poses.json"
+            _log(f"No {name} next to the FBX or in FBXs/<rig>/: pose check skipped (re-export from Maya).")
             return None
+        _log(f"Poses: {poses_path}")
         return run(rig_blueprint, poses_path, manifest=manifest)
     except Exception as exc:
         _warn(f"Pose check failed to run ({type(exc).__name__}: {exc}); the rig build is unaffected.")
