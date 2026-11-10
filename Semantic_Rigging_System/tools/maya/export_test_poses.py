@@ -180,13 +180,23 @@ def _capture(joints, posed_controls, attribute_values, name, group):
     return pose
 
 
+#: probe step of an attribute with no upper bound (a length factor, a twist in degrees)
+OPEN_ATTRIBUTE_PROBE = 1.0
+
+
 def _probe_value(channel, current, attribute_info, unit_scale):
     if channel in _ROTATE:
         return current + ROTATE_PROBE_DEGREES
     if channel in _TRANSLATE:
         return current + TRANSLATE_PROBE_CM / unit_scale
-    lo = attribute_info.get("min", 0.0)
-    hi = attribute_info.get("max", 1.0)
+    lo = attribute_info.get("min")
+    hi = attribute_info.get("max")
+    if hi is None:
+        # No upper bound (``length`` 0.001.., ``twist``): a step up, not the
+        # lower bound (which would collapse a bone to nothing).
+        return current + OPEN_ATTRIBUTE_PROBE
+    if lo is None:
+        lo = hi - OPEN_ATTRIBUTE_PROBE
     return lo if abs(current - hi) < 1e-6 else hi
 
 
@@ -195,7 +205,8 @@ def _probe_value(channel, current, attribute_info, unit_scale):
 # ---------------------------------------------------------------------------
 
 _FK_ROLES = ("bone_driver", "constraint_driver")
-_IK_ROLES = ("ik_effector", "effector", "pole_vector", "pv")
+# ik_control: a spline's IK controls (Jeffy chain mode blends them with the FK ones)
+_IK_ROLES = ("ik_effector", "effector", "pole_vector", "pv", "ik_control")
 
 
 def _record_name(record):

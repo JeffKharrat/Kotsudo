@@ -286,14 +286,20 @@ class RigContext:
         anchor = record.get("anchor_bone") or record.get("driven_bone")
         placement = graph_utils.record_transform(self.hierarchy, record, anchor, label=label)
         # A parent space replaces the whole transform; an orient/point space
-        # only half of it, the other half still follows the Maya parent.
+        # only half of it, the other half still follows the Maya parent -- or,
+        # on a Jeffy anchor, the FIRST space (attach.py: the blendMatrix input
+        # is space 0, so a limb's FK root keeps riding on the chest while its
+        # orientation follows the chosen space).
         holder = self.world_key()
         if kind != "parent":
-            for parent_name in record.get("parent_controllers") or []:
-                key = self.control_key_for_maya(parent_name)
-                if key is not None:
-                    holder = key
-                    break
+            if blend.get("source") == "jeffy" and parents and parents[0][0] != "world":
+                holder = parents[0][0]
+            else:
+                for parent_name in record.get("parent_controllers") or []:
+                    key = self.control_key_for_maya(parent_name)
+                    if key is not None:
+                        holder = key
+                        break
         null = graph_utils.create_follow_null(
             self.hierarchy, self.hierarchy_controller, f"RB_{label}_Space", placement, holder
         )

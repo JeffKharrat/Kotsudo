@@ -1464,18 +1464,15 @@ def create_float_control(
 ):
     """Create (or refresh) a FLOAT control from a Maya attribute description."""
     control_key = make_key(unreal.RigElementType.CONTROL, control_name)
-    minimum = float(info.get("min", 0.0))
-    maximum = float(info.get("max", 1.0))
-    if maximum < minimum:
-        minimum, maximum = maximum, minimum
-    value = max(minimum, min(maximum, float(info.get("value", info.get("default", minimum)))))
+    minimum, maximum, has_min, has_max = attribute_limits(info)
+    value = max(minimum, min(maximum, float(info.get("value", info.get("default", 0.0)) or 0.0)))
 
     make_value = unreal.RigHierarchy.make_control_value_from_float
     settings = unreal.RigControlSettings()
     settings.control_type = unreal.RigControlType.FLOAT
     settings.animation_type = unreal.RigControlAnimationType.ANIMATION_CONTROL
     settings.primary_axis = unreal.RigControlAxis.X
-    settings.limit_enabled = [unreal.RigControlLimitEnabled(True, True)]
+    settings.limit_enabled = [unreal.RigControlLimitEnabled(has_min, has_max)]
     settings.minimum_value = make_value(minimum)
     settings.maximum_value = make_value(maximum)
     settings.is_transient_control = False
@@ -1787,6 +1784,25 @@ def record_transform(hierarchy, record, anchor_bone, fallback_transform=None, la
 # "Get Float Channel" (RigUnit_GetFloatAnimationChannel: Control + Channel).
 # ---------------------------------------------------------------------------
 
+UNLIMITED_CHANNEL_RANGE = 1.0e6
+
+
+def attribute_limits(info):
+    """(minimum, maximum, has_min, has_max) of a Maya attribute description.
+
+    A missing or None bound (Maya attributes without a limit: ``twist``, a
+    ``length`` that only has a minimum) is open: the channel gets no limit on
+    that side and a wide value range, instead of a 0..1 default that would
+    clamp the animator's values."""
+    minimum, maximum = info.get("min"), info.get("max")
+    has_min, has_max = minimum is not None, maximum is not None
+    minimum = float(minimum) if has_min else -UNLIMITED_CHANNEL_RANGE
+    maximum = float(maximum) if has_max else UNLIMITED_CHANNEL_RANGE
+    if maximum < minimum:
+        minimum, maximum = maximum, minimum
+    return minimum, maximum, has_min, has_max
+
+
 def create_animation_channels(hierarchy, hierarchy_controller, control_key, infos):
     """Add one float channel per Maya attribute under ``control_key``.
 
@@ -1802,16 +1818,13 @@ def create_animation_channels(hierarchy, hierarchy_controller, control_key, info
         name = info.get("name")
         if not name:
             continue
-        minimum = float(info.get("min", 0.0))
-        maximum = float(info.get("max", 1.0))
-        if maximum < minimum:
-            minimum, maximum = maximum, minimum
-        value = max(minimum, min(maximum, float(info.get("value", info.get("default", minimum)))))
+        minimum, maximum, has_min, has_max = attribute_limits(info)
+        value = max(minimum, min(maximum, float(info.get("value", info.get("default", 0.0)) or 0.0)))
 
         settings = unreal.RigControlSettings()
         settings.control_type = unreal.RigControlType.FLOAT
         settings.animation_type = unreal.RigControlAnimationType.ANIMATION_CHANNEL
-        settings.limit_enabled = [unreal.RigControlLimitEnabled(True, True)]
+        settings.limit_enabled = [unreal.RigControlLimitEnabled(has_min, has_max)]
         settings.minimum_value = make_value(minimum)
         settings.maximum_value = make_value(maximum)
         settings.display_name = str(name)

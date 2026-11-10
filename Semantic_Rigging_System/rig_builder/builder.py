@@ -21,7 +21,8 @@ from .metadata_reader import (
 from .modules.fk_module import FKModule
 from .modules.ik_module import IKModule
 from .modules.ikfk_module import IKFKModule
-from .modules.jeffy_modules import JeffyFKChainModule, JeffyRigBaseModule
+from .modules.jeffy_modules import JeffyFKChainModule, JeffyIKFKLimbModule, JeffyRigBaseModule
+from .modules.jeffy_ribbon import JeffyRibbonModule, JeffySplineModule
 from .modules.rig_module import RigModule
 from .modules.spline_ik_module import SplineIKModule
 
@@ -50,6 +51,9 @@ MODULE_REGISTRY = {
     # Rigs built with the Jeffy toolkit (docs/jeffy-v010-support.md).
     "Jeffy.rig_base": JeffyRigBaseModule,
     "Jeffy.fk_chain": JeffyFKChainModule,
+    "Jeffy.ikfk_limb": JeffyIKFKLimbModule,
+    "Jeffy.ribbon": JeffyRibbonModule,
+    "Jeffy.spline": JeffySplineModule,
 }
 
 
@@ -140,7 +144,10 @@ MODULE_BUILD_ORDER = {
     "Jeffy.fk_chain": 0,
     "IKLimb": 1,
     "IKFKSwitch": 2,
+    "Jeffy.ikfk_limb": 2,
     "SplineIK": 3,
+    "Jeffy.spline": 3,
+    "Jeffy.ribbon": 4,          # reads the limb's solved bones
 }
 
 

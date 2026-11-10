@@ -47,7 +47,7 @@ CALIBRATION_TOLERANCE_CM = 0.1
 # root-tip line is ~sqrt(2 k slack), so this alone leaves a straight 7 m arm's
 # elbow undetermined by ~0.4 cm.
 SLACK_ROUNDING_CM = 5e-4
-LIMB_MODULE_TYPES = ("IKFKSwitch", "IKLimb")
+LIMB_MODULE_TYPES = ("IKFKSwitch", "IKLimb", "Jeffy.ikfk_limb")
 
 
 def _log(message):

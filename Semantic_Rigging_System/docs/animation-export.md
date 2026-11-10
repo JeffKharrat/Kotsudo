@@ -464,7 +464,7 @@ Later, at least one clip made by an animator, not by a script.
 | Phase | Delivers | Done when |
 |---|---|---|
 | **S0** ✅ Maya clip export | `export_animation.py`, Animation tab, baked FBX + sidecar (with sparse keys and tangents), Maya test | sidecar frame N = pose capture at frame N; keys read only from `animCurveT*` (passed on 5 clips) |
-| **S1** Unreal baseline (written) | `run_anim_import.py`: baked FBX → Anim Sequence; measuring stick on it. The Level Sequence comes with 1a | measuring stick ≈ 0 (T0) |
+| **S1** ✅ Unreal baseline | `run_anim_import.py`: baked FBX → Anim Sequence; measuring stick on it. The Level Sequence comes with 1a | measuring stick ≈ 0: V06 4×T0 + 1×T1 (2026-11-02), V010 4×T0 + 1×T1 (2026-11-03) |
 
 **Axis 1: retakes on the baked clip**
 
@@ -484,6 +484,14 @@ Later, at least one clip made by an animator, not by a script.
 
 R1 (first Unreal run of the newer features) is still pending; clips 1–5 do
 not depend on it, clip 6 does.
+
+**Reference rig (2026-11-10).** The animation axes continue on Murakami
+**V010** (the matrix rig built with the Jeffy toolkit, `docs/jeffy-v010-support.md`,
+phase J6): its five clips are exported in `FBXs/murakami_v010/` and the
+shared start is confirmed on it. V06 stays as the comparison rig. Phase 1a
+(the retake window) starts once the V010 Control Rig passes its pose check
+in Unreal (J3–J5), so that the controls the window keys are the ones the
+rig will keep.
 
 ## 13. To verify on the first Unreal run
 

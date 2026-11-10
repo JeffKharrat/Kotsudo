@@ -4,7 +4,8 @@
   Maintenance memo (for Claude and anyone editing this page)
   - Source of truth: docs/explainer/kotsudo-explained.html in the repo. It is also published as a claude.ai artifact.
   - When a feature changes, update its section here in the same change, then republish.
-  - Section order: idea, pipeline, modules (IK/FK, spline, constraints, rest), drivers and extras, checking and tools, then plans ("Next").
+  - Section order: idea, pipeline, modules (IK/FK, spline, constraints, rest), drivers and extras, matrix rigs (Jeffy / V010), checking and tools, then plans ("Next").
+    Engineering detail for V010: docs/jeffy-v010-support.md (update the Jeffy section's status pills after each Unreal run).
   - A plan section keeps the five parts, with "How we will solve it" / "How we will know it works"; rewrite it as a normal section once built.
     Engineering detail for the animation plan: docs/animation-export.md.
   - Every feature keeps the same five parts: What it is in Maya / The challenges / How we solved it
@@ -244,6 +245,10 @@ section[id] { scroll-margin-top: 16px; }
     <li><a href="#space-switching">Space switching</a></li>
     <li><a href="#offset-groups">Offset / zero groups</a></li>
     <li><a href="#materials">Materials</a></li>
+  </ol>
+  <h2>Matrix rigs</h2>
+  <ol>
+    <li><a href="#jeffy">Murakami V010 (Jeffy toolkit)</a></li>
   </ol>
   <h2>Checking and tools</h2>
   <ol>
@@ -1945,6 +1950,137 @@ section[id] { scroll-margin-top: 16px; }
   </ul>
 </section>
 
+<!-- ============================================================ JEFFY / V010 -->
+<section class="feature" id="jeffy">
+  <h2>Murakami V010: a matrix rig (Jeffy toolkit)</h2>
+  <p class="lead">The same character, re-rigged with matrix nodes instead of constraints, using the Jeffy toolkit. The pipeline reads what Jeffy declares about each setup, measures the rest from the scene, and rebuilds every setup in Unreal: FK chains, spaces, IK/FK limbs, bendy ribbons, spine and neck splines, face sliders.</p>
+  <div class="status"><span class="pill ok">Maya: all 35 setups read and described (J0–J5)</span><span class="pill ok">Unreal: skeleton + baked clips T0/T1 (J1); FK, spaces, rig base built (J2)</span><span class="pill todo">Unreal: limbs, ribbons, splines written, pose check pending</span></div>
+
+  <h3>What it is in Maya</h3>
+  <p>V010 has <b>no constraints</b> (V06 had 57): 890 matrix nodes (<code>multMatrix</code>, <code>blendMatrix</code>, <code>composeMatrix</code>…) do the work. Every setup ends in <b>outputs</b>, one transform per bind joint, and each joint copies its output exactly: <code>joint.world = output.world</code>. Jeffy also writes a <b>description</b> of each setup on a network node (its type, the joints it was built on, its spaces, its controls and outputs). 102 skinned joints: 40 of them are ribbon joints on the limbs.</p>
+
+  <h3>The challenges</h3>
+  <ol class="challenges">
+    <li><b>Kotsudo found nothing.</b> It looked for constraints, ikHandles on the bind chain and <code>rigTag_*</code> tags: 0 modules, 0 controls on V010.</li>
+    <li><b>Matrix groups hide the hierarchy.</b> Space switches and offsets live in <code>offsetParentMatrix</code> connections, not in parent groups; the old walker stopped at them.</li>
+    <li><b>Ribbons are NURBS surfaces.</b> Control Rig has no NURBS strip; 40 joints ride on <code>uvPin</code> nodes at fixed positions along ten strips.</li>
+    <li><b>The spine is a spline IK on a ribbon.</b> And Maya's spline IK places joints by <b>chord</b> length along the curve, not by arc length (measured: 2 cm difference at the third neck joint).</li>
+    <li><b>Jeffy's IK does more than Unreal's.</b> Soft IK, stretch, pin to the pole, per-bone lengths and a twist, all as node maths in front of the solver.</li>
+  </ol>
+
+  <h3>How we solved it</h3>
+
+  <div class="sol">
+    <div>
+      <span class="num">SOLUTION 1</span>
+      <h4>Read Jeffy's description, measure the rest from the scene</h4>
+      <p><code>jeffy_reader.py</code> turns every setup into a Kotsudo module (<code>Jeffy.fk_chain</code>, <code>Jeffy.ikfk_limb</code>…) and each control into a standard controller record: parents, space switch, driven groups, attributes. Kotsudo's rule holds: <b>the tool declares meaning, values are measured, behaviour is checked</b> by the pose check. A rig without Jeffy data still goes through the tag reader.</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 170" role="img" aria-label="A Jeffy setup node describes type, slots, anchors, controls and outputs; the reader turns it into a Kotsudo module with controller records and measured maths.">
+        <rect class="bm" x="10" y="20" width="200" height="130" rx="5"/>
+        <text x="110" y="42" text-anchor="middle" class="mt">L_ArmLeaf1_SETUP</text>
+        <text x="22" y="64" class="s">type: ikfk_limb</text>
+        <text x="22" y="82" class="s">slots: start, mid, end</text>
+        <text x="22" y="100" class="s">anchors: orient, parent ×2</text>
+        <text x="22" y="118" class="s">controls: fk0..2, ik, pole, settings</text>
+        <text x="22" y="136" class="s">outputs → joints</text>
+        <line class="ln" x1="210" y1="85" x2="300" y2="85" marker-end="url(#arr)"/>
+        <text x="255" y="78" text-anchor="middle" class="s">reader</text>
+        <rect class="bu" x="305" y="20" width="205" height="130" rx="5"/>
+        <text x="407" y="42" text-anchor="middle" class="ut">module Jeffy.ikfk_limb</text>
+        <text x="317" y="64" class="s">6 controller records</text>
+        <text x="317" y="82" class="s">space switches (solo poses)</text>
+        <text x="317" y="100" class="s">switch: ikFk (1 = IK)</text>
+        <text x="317" y="118" class="s">params.limb: soft, stretch, pin,</text>
+        <text x="317" y="136" class="s">twist sign, rest lengths</text>
+      </svg>
+      <figcaption>35 setups → 31 modules (the 4 face-slider wires become blendshape drivers).</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">SOLUTION 2</span>
+      <h4>Jeffy's IK goal in front of Unreal's Basic IK</h4>
+      <p>The limb module is Kotsudo's IK/FK module with one change: the solver reaches for a <b>goal</b>, not the IK control. The goal is Jeffy's own formula (soft zone near full extension, stretch, pin), written as float and vector nodes; the bone lengths follow <code>upperLength</code>, <code>lowerLength</code> and the stretch factor, and <code>twist</code> turns the pole position about the limb axis (Unreal's mirrored axes get the opposite sign, measured in Maya).</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 190" role="img" aria-label="The IK control sits beyond reach; the goal stops short in the soft zone; the bones stretch toward it when stretch is on.">
+        <circle class="bu" cx="60" cy="150" r="7"/><text x="60" y="176" text-anchor="middle" class="s">start</text>
+        <line class="lu" x1="60" y1="150" x2="230" y2="70" style="stroke-width:5;stroke-linecap:round"/>
+        <line class="lu" x1="230" y1="70" x2="392" y2="128" style="stroke-width:5;stroke-linecap:round"/>
+        <circle class="bu" cx="392" cy="128" r="6"/><text x="392" y="154" text-anchor="middle" class="s ut">goal (soft)</text>
+        <circle class="bm" cx="470" cy="150" r="8"/><text x="470" y="176" text-anchor="middle" class="s mt">IK control</text>
+        <line class="lw" x1="392" y1="128" x2="470" y2="150"/>
+        <path class="ln" d="M60,150 Q 300,20 470,150" style="fill:none;stroke-dasharray:4 4;opacity:.6"/>
+        <text x="300" y="34" text-anchor="middle" class="c">D = distance(start, IK end)</text>
+        <text x="20" y="22" class="s">Ds = L − sd + sd·(1 − e^−((D − L + sd)/sd)) when D &gt; L − sd</text>
+        <text x="20" y="40" class="s">goal = lerp(start + dir·Ds, IK end, 1 − (1−stretch)(1−pin))</text>
+      </svg>
+      <figcaption>Stretch 0, pin 0: the goal stops in the soft zone. Stretch 1: lengths × D/Ds and the goal is the control.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">SOLUTION 3</span>
+      <h4>Ribbons without a surface: weights measured once</h4>
+      <p>A point on a degree-3 strip at a fixed position is a <b>fixed weighted sum</b> of its five column positions (the B-spline basis weights, computed once in Maya). The tangent uses the derivative weights; the width direction the same weights on each column's rotated half-width. Unreal builds the frame with Aim Math and puts the joint at its rest offset from it. The columns themselves are what Jeffy wires: the limb bones, an aim frame rolled by the chest, the bend controls and halfway blends, read from the scene as a small expression tree.</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 170" role="img" aria-label="Five column centres along a bent segment; one ribbon joint is a weighted sum of them; its tangent and width come from the same weights.">
+        <path class="lm" d="M40,120 C 150,30 330,30 480,110" style="fill:none;stroke-width:2;opacity:.5"/>
+        <g class="bm">
+          <circle cx="40" cy="120" r="6"/><circle cx="130" cy="62" r="6"/><circle cx="250" cy="42" r="6"/><circle cx="370" cy="60" r="6"/><circle cx="480" cy="110" r="6"/>
+        </g>
+        <text x="40" y="146" text-anchor="middle" class="s">start</text><text x="130" y="88" text-anchor="middle" class="s">¼</text><text x="250" y="30" text-anchor="middle" class="s">bend control</text><text x="370" y="86" text-anchor="middle" class="s">¾</text><text x="480" y="136" text-anchor="middle" class="s">end</text>
+        <circle class="bu" cx="196" cy="47" r="7"/>
+        <text x="196" y="72" text-anchor="middle" class="s ut">joint u = 0.4</text>
+        <line class="ln" x1="196" y1="47" x2="246" y2="40" marker-end="url(#arr)"/>
+        <text x="20" y="160" class="c">p = 0.064·c0 + 0.384·c1 + 0.432·c2 + 0.120·c3 + 0.0·c4   (weights at u = 0.4, knots 0 0 0 1 2 2 2)</text>
+      </svg>
+      <figcaption>Ten strips, five joints each: 40 joints as weighted sums; no NURBS evaluation at runtime.</figcaption>
+    </figure>
+  </div>
+
+  <div class="sol">
+    <div>
+      <span class="num">SOLUTION 4</span>
+      <h4>Spine and neck: a Control Rig spline and a chord walk</h4>
+      <p>The seven ribbon columns ride on the IK controls, so a Control Rig spline through their centres (B-spline mode, the same clamped knots) <i>is</i> the ribbon's middle curve. Maya's spline IK then puts each hidden joint on the curve at <b>chord</b> distance (its rest bone length × the stretch factor) from the previous one. Unreal does the same with a three-step Newton search on the spline, starting from the joint's rest parameter. In the neck the result blends with the FK controls by <code>ikFk</code>, and the wave turns each FK zero by a sine of time.</p>
+    </div>
+    <figure>
+      <svg class="d" viewBox="0 0 520 170" role="img" aria-label="A curve with hidden joints placed at chord distances: each joint is where a circle of the bone length around the previous joint meets the curve.">
+        <path class="lm" d="M30,140 C 120,20 300,20 490,100" style="fill:none;stroke-width:2"/>
+        <g class="bu"><circle cx="30" cy="140" r="6"/><circle cx="118" cy="62" r="6"/><circle cx="220" cy="40" r="6"/><circle cx="335" cy="46" r="6"/><circle cx="440" cy="78" r="6"/></g>
+        <path class="lu" d="M30,140 L118,62 L220,40 L335,46 L440,78" style="fill:none;stroke-width:1.5;opacity:.7"/>
+        <circle class="lw" cx="118" cy="62" r="104" style="fill:none;stroke-dasharray:3 4;opacity:.6"/>
+        <text x="60" y="162" class="s">chord = rest bone length × lerp(1, length/rest length, stretch)</text>
+        <text x="380" y="30" class="c">arc ≠ chord: 2 cm at the 3rd neck joint</text>
+      </svg>
+      <figcaption>Measured in Maya: the hidden joints sit on the curve, at chord distances. The last joint may overshoot the curve end; it then clamps to the end, as Maya's closest point does.</figcaption>
+    </figure>
+  </div>
+
+  <h3>How we know it works</h3>
+  <ul>
+    <li><b>J1, in Unreal:</b> five baked V010 clips, four T0 and one T1 (worst 0.0107 cm on a 13 m character), better than V06 because the matrix rig's rest pose is its bind pose.</li>
+    <li><b>J2, in Unreal:</b> 21 modules build (petals, eyes, eyelids, toes, global and root, face sliders); the pose check against the right poses file is the next run.</li>
+    <li><b>J3–J5, in Maya</b> (<code>tests/maya_jeffy_reader_test.py</code>, 2026-11-10): the IK goal formula reproduces Maya's hidden IK chain within 0.004 cm (goal, bone lengths, twist); the ribbon weights reproduce the 40 ribbon joints at rest and posed to 0.00001 cm; the spline chord walk reproduces the 12 spine and neck joints with stretch 1 and 0 within 0.0014 cm / 0.001°.</li>
+    <li>V06 still passes its Maya tests (space switch, driven groups, blendshape drivers, tool UI, animation clips).</li>
+  </ul>
+
+  <h3>Limits</h3>
+  <ul>
+    <li>Jeffy's <b>auto-snap</b> (IK/FK matching from a Maya callback) is an animator tool, not rig behaviour: not transferred.</li>
+    <li><code>volume</code> (film-only joint scale on the spine) is not rebuilt; the pose check ignores scale.</li>
+    <li>The wave needs the engine's absolute time; without a time node it stays at the export frame.</li>
+    <li>Eye blendshapes driven by two attributes at once are not supported.</li>
+  </ul>
+  <p class="muted">Engineering detail: <code>docs/jeffy-v010-support.md</code>.</p>
+</section>
+
 <!-- ============================================================ POSE CHECK -->
 <section class="feature" id="pose-check">
   <h2>Pose check</h2>
@@ -2581,6 +2717,7 @@ section[id] { scroll-margin-top: 16px; }
 <footer>
   <p><b>Changelog</b></p>
   <ul>
+    <li>2026-11-10: added "Murakami V010: a matrix rig (Jeffy toolkit)": the reader, the IK goal, ribbons as weighted sums, the spline chord walk; J0–J5 built and Maya-checked, J1–J2 run in Unreal, the full Unreal pose check pending.</li>
     <li>2026-11-02: animation clip export built in Maya (Animation tab, baked FBX + sidecar), tested on five script-made clips.</li>
     <li>2026-11-02: added "Animation export (plan)": the routes assessed, the recommended first steps, and how the result will be measured. Same day: split into two axes after a shared start (axis 1: retakes on the baked clip; axis 2: the animator's keys on the Control Rig, with an edit test), and the control-axes question got Murakami's numbers. Nothing built yet.</li>
     <li>2026-10-23: space switches driven by the controller's own channel are wired after the control is built; Murakami test setups (arm IK spaces, neck curl) in <code>tools/maya/murakami_feature_setup.py</code>.</li>

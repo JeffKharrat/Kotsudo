@@ -1,10 +1,78 @@
 # Murakami V010 (Jeffy rig): support plan
 
-Status (2026-11-03): **J0 built** (Jeffy reader, export of V010). **J1
+Status (2026-11-10): **J0 built** (Jeffy reader, export of V010). **J1
 built**: in Unreal, 4 of 5 V010 clips are T0 and 1 is T1 (better than V06),
 confirmed after the `Root` name fix (97 bones scored, `Root` included).
-**J2 built** (FK chains, spaces, `length`, rig base, face-slider wires);
-its Unreal build and pose check are next. J3–J6 to do.
+**J2 built** (FK chains, spaces, `length`, rig base, face-slider wires):
+the Unreal build runs (21 modules, 629 nodes); its pose check was first run
+against the wrong poses file (fixed: the harness never borrows another
+rig's poses). **J3, J4, J5 built** (limbs, ribbons, splines: all 35 setups
+now reach the Unreal builder); their maths is checked against Maya by
+`tests/maya_jeffy_reader_test.py`; the Unreal build and pose check of the
+whole rig are next (section "J3–J5"). J6 follows that run.
+
+### J3–J5: limbs, ribbons, splines
+
+All of V010 is now described for the Unreal builder. The rule stays the
+same as J2: the controls are standard Kotsudo records (parents, spaces,
+driven groups, attributes), and what a record cannot carry -- the maths
+of a setup -- is **measured** from the scene into the module's `params`
+(`limb`, `ribbon`, `jeffy_spline`), then rebuilt as float / vector nodes
+(`rig_builder/jeffy_math.py`).
+
+**J3 `ikfk_limb` → `Jeffy.ikfk_limb`** (`modules/jeffy_modules.py`):
+Kotsudo's IK/FK module (FK controls, Basic IK, the switch control) with
+Jeffy's IK goal in front of the solver: the effector is not the IK control
+but `goal` from `ikfk_limb._ik_goal` (soft IK, stretch, pin), the bone
+lengths follow `upperLength` / `lowerLength` × stretch factor, pinned to
+the pole distances by `pin`, and `twist` turns the pole position about the
+start→end axis (Maya +30° measured as +30° right-handed; Unreal's mirrored
+axes get −twist). The FK root's *orient* space keeps its translation on
+the first space (the chest / pelvis output), as Jeffy's blendMatrix does.
+`ikFk` proxies on the limb controls, `autoSnap` and the `sep_*` separators
+are dropped from the records (one switch, on the settings control, which
+follows the end joint).
+
+**J4 `ribbon` → `Jeffy.ribbon`** (`modules/jeffy_ribbon.py`, solve stage
+"helpers", after the limb): no NURBS surface is built. A point of a degree
+3 × 1 strip at fixed (u, v = ½) is a fixed weighted sum of its 5 column
+positions (Cox–de Boor weights, computed once in Maya), its tangent the
+derivative weights, its width direction the same weights on each column's
+rotated half-width vector. The pin frame is Aim Math on those two
+directions (which pin axes they are is fitted at rest), and the joint is
+`(joint_rest · pin_rest⁻¹) · pin`. The columns are the expressions Jeffy
+wires (`ribbon.py`): the limb bones, an aimMatrix (first segment, roll from
+the parent output), the bend controls and blendMatrix halves of those, read
+from the scene as a small expression tree. The bend controls hang from
+nulls re-written every frame from their follow blend. `bendyVis` shows and
+hides them. Verified in Maya: the predicted joints equal the real ones at
+rest and posed (see the test's "ribbon maths vs Maya" line).
+
+**J5 `spline` → `Jeffy.spline`**: the 7 columns ride on the IK controls
+(constant local offsets), so a Control Rig spline through the column
+centres (B-spline mode, clamped uniform knots = Maya's) is the ribbon's
+middle curve. Finding: Maya's spline IK places each hidden joint on the
+curve at **chord** distance (its rest bone length × the stretch factor)
+from the previous one, not at arc length -- so each joint's U is found by
+a 3-step Newton chord walk on the spline (position nodes), starting from
+its rest U; the stretch factor is `lerp(1, length / rest length, stretch)`.
+Position and tangent come from the spline nodes; the width direction is a
+second spline through the strip's edge CVs (centre + rotated half width)
+minus the middle one, at the same U -- the rest basis weights were tried
+first and left 0.6–2.5 cm on the posed neck (the strip twists fast near a
+rotated control), the edge spline brings it to 0.0014 cm. Then Aim Math
+and the rest offset as for J4. Chain mode (the neck): the result blends with the FK controls'
+transforms by `ikFk`, and the **wave** turns each FK zero about its own
+axis by `sin(fraction / waveLength · 360 − time · waveSpeed + waveOffset) ·
+waveAmplitude · lerp(1, fraction, waveFalloff)` (time from the engine's
+absolute time × fps; frozen at the export frame when no time node exists).
+Not rebuilt: `volume` (film-only joint scale; the pose check ignores scale)
+and the spline IK's straight overshoot past the curve end (the last joint
+clamps to the end, as Maya's closest point does).
+
+Also: open attribute ranges (`twist`, `length` with no maximum) become
+unlimited channels (they were clamped to 0..1), and the pose exporter
+probes such attributes by +1 instead of jumping to their minimum.
 
 ### J2: how the Jeffy setups reach the Unreal builder
 
@@ -207,7 +275,7 @@ bone lengths = [upper*upperLength, lower*lowerLength] * f, then
 | **J2** FK, spaces, wires, base | `fk_chain` (+ `length`), matrix spaces (parent / orient / point, enum), `rig_base` (+ `globalScale`), `wire_attribute` | pose check: petals, eyes, eyelids, toes, face sliders within T1 |
 | **J3** IK/FK limbs | soft IK, stretch, pin, lengths, `ikFk`, pole and twist, limb spaces | 4 limbs within T1 on all probes (including the new attributes) |
 | **J4** Ribbons | weighted-column ribbons, bend controls, twist from parent | the 40 ribbon joints within T1 |
-| **J5** Splines | spine and neck: ribbon + arc-length spacing, IK/FK, stretch, wave (time) | spine and neck within T1; wave matches at several times |
+| **J5** Splines | spine and neck: ribbon + chord spacing (Maya's spline IK), IK/FK, stretch, wave (time) | spine and neck within T1; wave matches at several times |
 | **J6** Animation | the animation axes resume on V010 (axis 1 first) | as in `animation-export.md` |
 
 J0 and J1 do not change the Unreal builder; J2–J5 each add one module type.
