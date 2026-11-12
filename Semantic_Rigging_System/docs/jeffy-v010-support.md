@@ -11,6 +11,40 @@ now reach the Unreal builder); their maths is checked against Maya by
 `tests/maya_jeffy_reader_test.py`; the Unreal build and pose check of the
 whole rig are next (section "J3–J5"). J6 follows that run.
 
+Update (2026-11-12): the first full Unreal run (31 modules) calibrated at
+rest to 0.002 cm, but the torso spline stopped on a pin name and every
+module below it was skipped (see "J3–J5 in Unreal, first run"). Fixed,
+with every node and pin of the Jeffy modules now checked against the UE
+5.6 headers. The pre-export check knows what the Jeffy modules rebuild:
+V010 analyses with 0 errors, 0 to review.
+
+### J3–J5 in Unreal, first run (2026-11-10)
+
+- Rest calibration OK: joints max 0.0019 cm, controls 0.0001 cm.
+- `C_spine` (Jeffy.spline) failed: *Transform Vector*'s input is
+  `Location` in UE 5.6 (the module fed `Vector` / `Value`). Every module
+  under the torso (limbs, ribbons, neck, eyes, tentacles) was skipped, so
+  only 9 of 87 controls existed and no pose could be applied.
+- Found by checking all units offline (engine headers, not a run): Aim
+  Math is `RigUnit_AimBoneMath` with `InputTransform` (the module asked
+  for `AimMath` / `Input`, the next failure on the ribbons). Every other
+  unit and pin used (float / vector / quaternion / transform maths, Get /
+  Set Transform, control visibility, the four spline units, Basic IK's
+  `BoneALength` / `BoneBLength` / `PoleVector`) matches the headers.
+- Wave time: UE 5.6 has no node for the sequence's absolute time
+  (Timeline and Get World Time count playback / world seconds, which do
+  not follow Sequencer scrubbing). The wave is rebuilt frozen at the
+  exported frame; amplitude, length, offset and falloff still act, only
+  `waveSpeed` does not animate it. The pre-export check shows this as a
+  gray "Partly transferred" note.
+- Pre-export check: limb `upperLength` / `lowerLength` / `softness` /
+  `stretch` / `pin` / `twist`, spline `stretch`, the wave attributes and
+  `globalScale` are no longer "Not transferred" (the Jeffy modules rebuild
+  them). Offset groups placed by a matrix network that a module rebuilds
+  (ribbon bend groups, spline FK zeros carrying the wave, settings groups
+  following the limb end) are marked `module` with what places them
+  instead of "placed by a matrix network".
+
 ### J3–J5: limbs, ribbons, splines
 
 All of V010 is now described for the Unreal builder. The rule stays the
@@ -64,8 +98,8 @@ rotated control), the edge spline brings it to 0.0014 cm. Then Aim Math
 and the rest offset as for J4. Chain mode (the neck): the result blends with the FK controls'
 transforms by `ikFk`, and the **wave** turns each FK zero about its own
 axis by `sin(fraction / waveLength · 360 − time · waveSpeed + waveOffset) ·
-waveAmplitude · lerp(1, fraction, waveFalloff)` (time from the engine's
-absolute time × fps; frozen at the export frame when no time node exists).
+waveAmplitude · lerp(1, fraction, waveFalloff)` (frozen at the
+export frame: UE 5.6 has no absolute-time node, see the first-run notes).
 Not rebuilt: `volume` (film-only joint scale; the pose check ignores scale)
 and the spline IK's straight overshoot past the curve end (the last joint
 clamps to the end, as Maya's closest point does).

@@ -273,8 +273,8 @@ class Graph:
         """Aim Math: the input transform turned so its ``primary_axis`` points
         at ``primary_target`` (a location, or a direction) and its
         ``secondary_axis`` toward ``secondary_direction``. Returns the pin."""
-        node = self.node(("AimMath",), "Aim")
-        self.feed(node, ["Input"], input_transform)
+        node = self.node(("AimBoneMath", "AimMath"), "Aim")
+        self.feed(node, ["InputTransform", "Input"], input_transform)
         self.feed(node, ["Primary.Weight"], 1.0)
         self.feed(node, ["Primary.Kind"], "Direction" if primary_is_direction else "Location")
         self.feed(node, ["Primary.Axis"], primary_axis)
@@ -333,8 +333,13 @@ class Graph:
         return float(fallback)
 
     def time_frames(self, fps):
-        """Pin: the rig's absolute time in frames, or None when no time unit exists."""
-        for names in (("GetAbsoluteTime", "AbsoluteTime"), ("Timeline",)):
+        """Pin: the rig's absolute time in frames, or None when no time unit exists.
+
+        UE 5.6 has no graph node for the sequence's absolute time: Timeline
+        and Get World Time count playback or world seconds, which do not
+        follow Sequencer scrubbing and would not match Maya's frame. Only a
+        true absolute-time unit is used; otherwise the caller freezes time."""
+        for names in (("GetAbsoluteTime", "AbsoluteTime"),):
             struct = unit(*names)
             if struct is None:
                 continue

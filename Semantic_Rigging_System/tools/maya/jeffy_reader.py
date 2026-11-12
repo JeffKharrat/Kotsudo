@@ -603,7 +603,82 @@ def control_record(setup, control, index):
     _clean_attributes(record, setup)
     if setup["type"] in DESCRIBED_TYPES:
         _describe_hierarchy(record, node, index)
+        _mark_module_placed(record, setup)
     return record
+
+
+WAVE_ATTRIBUTES = ("waveAmplitude", "waveLength", "waveOffset", "waveFalloff")
+FROZEN_WAVE_ATTRIBUTE = "waveSpeed"
+
+
+def transferred_attributes(manifest):
+    """{(control, attribute): note} of the control attributes the Jeffy
+    modules rebuild in Unreal (limb lengths / softness / stretch / pin /
+    twist, spline stretch and wave, ribbon visibility, globalScale). The
+    note is None when fully rebuilt, else what differs."""
+    handled = {}
+    for module in manifest.get("modules") or []:
+        module_type = module.get("module_type") or ""
+        params = module.get("params") or {}
+        limb = params.get("limb") or {}
+        if module_type == "Jeffy.ikfk_limb" and limb.get("ik_control"):
+            for attribute in (limb.get("attributes") or {}).values():
+                if attribute:
+                    handled[(limb["ik_control"], attribute)] = None
+        spline = params.get("jeffy_spline") or {}
+        if module_type == "Jeffy.spline":
+            if spline.get("stretch"):
+                handled[(spline["stretch"]["control"], spline["stretch"]["attr"])] = None
+            wave = spline.get("wave") or {}
+            if wave.get("holder"):
+                for attribute in WAVE_ATTRIBUTES:
+                    handled[(wave["holder"], attribute)] = None
+                handled[(wave["holder"], FROZEN_WAVE_ATTRIBUTE)] = (
+                    "Control Rig has no absolute-time node: the wave is rebuilt frozen at the exported frame, "
+                    "so waveSpeed does not animate it in Unreal")
+        ribbon = params.get("ribbon") or {}
+        if module_type == "Jeffy.ribbon" and ribbon.get("settings_control") and ribbon.get("visibility_attr"):
+            handled[(ribbon["settings_control"], ribbon["visibility_attr"])] = None
+    for records in (manifest.get("bone_controllers") or {}).values():
+        for record in records:
+            if not record.get("jeffy_setup"):
+                continue
+            for info in record.get("attributes") or []:
+                if info.get("name") == "globalScale":
+                    handled[(record.get("name"), "globalScale")] = None
+    return handled
+
+
+MATRIX_GROUP_PROBLEM = "placed by a matrix network (offsetParentMatrix)"
+
+
+def _mark_module_placed(record, setup):
+    """Offset groups whose matrix network the Unreal modules rebuild are no
+    problem: a ribbon's bend groups follow the strip (Jeffy.ribbon follow
+    nulls), a spline chain's FK zeros carry the wave (Jeffy.spline wave
+    nulls) and a top group that follows one node is its space bone or
+    controller. They become kind ``module`` with what places them."""
+    role = record.get("role")
+    placed_by = None
+    if setup["type"] == "ribbon" and role in ("bend", "bend_joint"):
+        placed_by = "Jeffy.ribbon (follows the strip)"
+    elif setup["type"] == "spline" and role == "bone_driver":
+        placed_by = "Jeffy.spline (wave)"
+    follow = record.get("parent_space_bone") if not record.get("parent_space_blend") else None
+    first = True
+    for entry in record.get("offset_stack") or []:
+        if entry.get("kind") != "matrix" or MATRIX_GROUP_PROBLEM not in (entry.get("problems") or []):
+            continue
+        by = placed_by or ("follows {}".format(follow) if follow and first else None)
+        first = False
+        if by is None:
+            continue
+        entry["problems"] = [p for p in entry["problems"] if p != MATRIX_GROUP_PROBLEM]
+        if not entry["problems"] and not entry.get("driven"):
+            entry["kind"] = "module"
+            entry.pop("problems", None)
+            entry.pop("driven", None)
+        entry["placed_by"] = by
 
 
 def bone_controller_entries(module, setups=None):

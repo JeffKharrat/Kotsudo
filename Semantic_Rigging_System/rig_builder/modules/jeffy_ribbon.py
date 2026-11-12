@@ -327,7 +327,7 @@ class JeffySplineModule(_JeffyBase):
             else:
                 node = graph.node(("MathTransformTransformVector",), "TPoint")
                 graph.feed(node, ["Transform"], owner)
-                graph.feed(node, ["Vector", "Value"], local)
+                graph.feed(node, ["Location", "Vector", "Value"], local)
                 points.append(graph.out(node))
         from_points = spline_ik_module._pick_spline_from_points_unit()
         position_unit = _spline_unit("Position", "Spline")
@@ -440,8 +440,9 @@ class JeffySplineModule(_JeffyBase):
             return
         time = graph.time_frames(float(wave.get("fps") or 24.0))
         if time is None:
-            self.context._warn(f"{self.name}: no time node in this engine build; the wave is frozen at frame "
-                               f"{wave.get('time_frames', 0)}.")
+            self.context._warn(f"{self.name}: Control Rig has no absolute-time node; the wave keeps its "
+                               f"amplitude, length, offset and falloff but is frozen at frame "
+                               f"{wave.get('time_frames', 0)} (waveSpeed does not animate it).")
             time = float(wave.get("time_frames") or 0.0)
         moving = graph.mul(time, speed)
         sine_unit = jeffy_math.unit("MathFloatSin")

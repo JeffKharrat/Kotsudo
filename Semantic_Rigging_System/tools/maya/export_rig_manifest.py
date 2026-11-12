@@ -4675,6 +4675,18 @@ def scene_analysis(rig_name, modules_config):
                 group_drivers.add((weight['control'], weight['attr']))
     morph_drivers = {(e['driver']['control'], e['driver']['attr'])
                      for e in manifest.get('blendshapes') or [] if e.get('driver')}
+    # Attributes a matrix-rig (Jeffy) module rebuilds itself.
+    module_attributes = {}
+    if manifest.get('jeffy') or any(str(m.get('module_type', '')).startswith('Jeffy.')
+                                    for m in manifest.get('modules') or []):
+        try:
+            import jeffy_reader
+            module_attributes = jeffy_reader.transferred_attributes(manifest)
+        except Exception as exc:
+            check('orange', 'Not transferred', 'Jeffy setups', 'could not list the rebuilt attributes ({})'.format(exc))
+    for (name, attr), note in sorted(module_attributes.items()):
+        if note:
+            check('gray', 'Partly transferred', '{}.{}'.format(name, attr), note)
     # Every controller in the scene, not only module ones: a settings control
     # (Head_Settings_Ctrl) often belongs to no module.
     scene_controllers = sorted({n for n in cmds.ls(type='transform', long=True) or [] if _has_controller_shape(n)})
@@ -4682,7 +4694,7 @@ def scene_analysis(rig_name, modules_config):
         name = _short_node_name(node)
         for attribute in _controller_attributes(node):
             attr = attribute.get('name')
-            if not attr or (name, attr) in switches or (name, attr) in morph_drivers or (name, attr) in group_drivers:
+            if not attr or (name, attr) in switches or (name, attr) in morph_drivers or (name, attr) in group_drivers                     or (name, attr) in module_attributes:
                 continue
             reached = _transforms_driven_by('{}.{}'.format(node, attr))
             if reached:

@@ -2068,6 +2068,8 @@ section[id] { scroll-margin-top: 16px; }
     <li><b>J1, in Unreal:</b> five baked V010 clips, four T0 and one T1 (worst 0.0107 cm on a 13 m character), better than V06 because the matrix rig's rest pose is its bind pose.</li>
     <li><b>J2, in Unreal:</b> 21 modules build (petals, eyes, eyelids, toes, global and root, face sliders); the pose check against the right poses file is the next run.</li>
     <li><b>J3–J5, in Maya</b> (<code>tests/maya_jeffy_reader_test.py</code>, 2026-11-10): the IK goal formula reproduces Maya's hidden IK chain within 0.004 cm (goal, bone lengths, twist); the ribbon weights reproduce the 40 ribbon joints at rest and posed to 0.00001 cm; the spline chord walk reproduces the 12 spine and neck joints with stretch 1 and 0 within 0.0014 cm / 0.001°.</li>
+    <li><b>J3–J5, first Unreal run</b> (2026-11-10): 31 modules loaded and the rest pose matched Maya to 0.002 cm, but the torso spline stopped on one pin name and every module under it was skipped. Fixed, and every node and pin the Jeffy modules use is now checked against the Unreal 5.6 headers before the next run.</li>
+    <li><b>Pre-export check:</b> V010 analyses with 0 errors and 0 to review. Limb lengths, softness, stretch, pin and twist, spline stretch, the wave and <code>globalScale</code> are recognised as rebuilt by the Jeffy modules.</li>
     <li>V06 still passes its Maya tests (space switch, driven groups, blendshape drivers, tool UI, animation clips).</li>
   </ul>
 
@@ -2075,7 +2077,7 @@ section[id] { scroll-margin-top: 16px; }
   <ul>
     <li>Jeffy's <b>auto-snap</b> (IK/FK matching from a Maya callback) is an animator tool, not rig behaviour: not transferred.</li>
     <li><code>volume</code> (film-only joint scale on the spine) is not rebuilt; the pose check ignores scale.</li>
-    <li>The wave needs the engine's absolute time; without a time node it stays at the export frame.</li>
+    <li>The wave is frozen at the exported frame in Unreal: Control Rig 5.6 has no node for the sequence's absolute time, so <code>waveSpeed</code> does not animate it (amplitude, length, offset and falloff still act).</li>
     <li>Eye blendshapes driven by two attributes at once are not supported.</li>
   </ul>
   <p class="muted">Engineering detail: <code>docs/jeffy-v010-support.md</code>.</p>
@@ -2717,6 +2719,7 @@ section[id] { scroll-margin-top: 16px; }
 <footer>
   <p><b>Changelog</b></p>
   <ul>
+    <li>2026-11-12: V010 first full Unreal run read (torso spline pin name, Aim Math name fixed; wave frozen); the pre-export check recognises what the Jeffy modules rebuild.</li>
     <li>2026-11-10: added "Murakami V010: a matrix rig (Jeffy toolkit)": the reader, the IK goal, ribbons as weighted sums, the spline chord walk; J0–J5 built and Maya-checked, J1–J2 run in Unreal, the full Unreal pose check pending.</li>
     <li>2026-11-02: animation clip export built in Maya (Animation tab, baked FBX + sidecar), tested on five script-made clips.</li>
     <li>2026-11-02: added "Animation export (plan)": the routes assessed, the recommended first steps, and how the result will be measured. Same day: split into two axes after a shared start (axis 1: retakes on the baked clip; axis 2: the animator's keys on the Control Rig, with an edit test), and the control-axes question got Murakami's numbers. Nothing built yet.</li>
