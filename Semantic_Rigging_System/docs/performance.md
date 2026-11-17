@@ -9,7 +9,7 @@ Measured on Murakami V010 (Jeffy matrix rig, 117 joints, 87 controls,
 |---|---|---|---|
 | Maya: rig FBX + manifest + 635 test poses | ~60 min | 36 s | FBX check regex (below) |
 | Maya: each animation clip (49 frames) | ~30 min | seconds | same regex, run once per clip |
-| Unreal: graph build (31 modules) | 30 min | ~5.5 min (notifications paused; expect a little more without) | VM recompile after every graph edit |
+| Unreal: graph build (31 modules) | 30 min | 8.5 min (5.5 min with notifications also paused, unsafe) | VM recompile after every graph edit |
 | Unreal: pose check (634 poses) | 2 s | 2 s | — |
 
 ### Maya: one regular expression

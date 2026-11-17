@@ -48,12 +48,15 @@ and probing the rig at rest:
 Result after the first two fixes: calibration p95 1.2 cm (from 667 cm),
 torso and limbs within 0.1–0.3 cm on every pose. Left at that point: the
 ribbons' second segment flipped 180° under small torso moves and rested
-58–91° off Maya (bone columns in Unreal axes, fixed by the bone frame
-correction above, **not yet confirmed in Unreal**: the editor crashed on
-that build, see `docs/performance.md`), the head about 0.4° off at rest
-(spline samples raised from 32 to 128 per segment to test whether the
-sampled tangent is the cause, not yet confirmed), and the toes 51 cm off
-on the `globalScale` probe only.
+58–91° off Maya (bone columns in Unreal axes) and the head about 0.4° off
+at rest.
+
+Confirmed in Unreal after the bone frame correction and 128 spline samples
+per segment (was 32): the 40 ribbon joints rest within 0.5° / 0.34 cm of
+Maya (the limb bone itself is 0.36° off), no flips on any pose (worst
+0.27°), calibration p95 0.34 cm (head children; was 1.2 cm), every module
+within about 1 cm / 0.3° on all 634 poses. Left: the toes, 51 cm off on
+the `globalScale` probe only.
 
 ### J3–J5 in Unreal, first run (2026-11-10)
 
