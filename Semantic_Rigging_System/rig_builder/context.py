@@ -444,6 +444,7 @@ class RigContext:
         position = unreal.Vector2D(self.claim_module_column(width=700), -400)
         self.set_exec_tail(graph_utils.add_follow_update(
             self.graph_controller, self.model, name, bone, position, tail,
+            scale_control=getattr(self, "rig_scale_control", None),
         ))
 
     def module_finished(self, module_name):

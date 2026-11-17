@@ -113,11 +113,11 @@ def _insert_array_element(controller, model, array_pin):
     if not before:
         return False
     try:
-        controller.insert_array_pin(array_pin, -1, "")
+        controller.insert_array_pin(array_pin, -1, "", False)
         return True
     except Exception:
         try:
-            controller.add_array_pin(array_pin, "")
+            controller.add_array_pin(array_pin, "", False)
             return True
         except Exception:
             return False

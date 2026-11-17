@@ -56,7 +56,12 @@ per segment (was 32): the 40 ribbon joints rest within 0.5° / 0.34 cm of
 Maya (the limb bone itself is 0.36° off), no flips on any pose (worst
 0.27°), calibration p95 0.34 cm (head children; was 1.2 cm), every module
 within about 1 cm / 0.3° on all 634 poses. Left: the toes, 51 cm off on
-the `globalScale` probe only.
+the `globalScale` probe only. Cause: the toe's space follows the foot bone,
+and solved bones (IK, splines, ribbons) carry no scale in Unreal while
+Maya's joints inherit the rig's, so the toe's offset did not double. Fix:
+follow spaces take their scale from the rig base's global control
+(`context.rig_scale_control`); **not yet confirmed in Unreal** (the editor
+ran out of memory on that build, see `docs/performance.md`).
 
 ### J3–J5 in Unreal, first run (2026-11-10)
 

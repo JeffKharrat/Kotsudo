@@ -109,6 +109,8 @@ class JeffyRigBaseModule(FKModule):
             tail = self.context.get_exec_tail() or graph_utils.find_forwards_solve_node_name(model)
             graph_utils.connect_exec(controller, model, tail, setter)
             self.context.set_exec_tail(setter)
+            # Follow spaces on solved bones take the rig scale from here.
+            self.context.rig_scale_control = control_name
             if self.logger:
                 self.logger.log(f"[JeffyRigBase] '{control_name}': globalScale scales the control.")
         except Exception as exc:
@@ -261,10 +263,10 @@ class JeffyIKFKLimbModule(IKFKModule):
             rotated = graph.vadd(goal["start"], graph.rotate_vector(rotation, graph.vsub(pole_p, goal["start"])))
             pole_pin = f"{ik_node}.PoleVector"
             try:
-                controller.break_all_links(pole_pin, True)
+                controller.break_all_links(pole_pin, True, False)
             except Exception:
                 try:
-                    controller.break_link(pole_p, pole_pin)
+                    controller.break_link(pole_p, pole_pin, False)
                 except Exception as exc:
                     raise RuntimeError(f"the pole vector pin could not be relinked ({exc})")
             if not graph_utils.connect_pins(controller, model, rotated, pole_pin):

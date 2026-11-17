@@ -142,8 +142,9 @@ SOLVE_STAGES = ("spaces", "primary", "helpers", "dynamics", "curves")
 # Also pause the rig editor's notifications while building (32 ms instead
 # of 46 ms per graph edit on top of the paused recompile). OFF: with them
 # paused, the open editor is not told that the previous build's nodes were
-# removed, and the editor crashed after a build (access violation,
-# 2026-11-17). Only turn on with the Control Rig editor closed.
+# removed. Only turn on with the Control Rig editor closed. (The 2026-11-17
+# editor crashes were out of memory from undo recording, now off: see
+# docs/performance.md.)
 FAST_BUILD_SUSPEND_NOTIFICATIONS = False
 
 MODULE_BUILD_ORDER = {

@@ -134,7 +134,7 @@ def _insert_array_pin(controller, node_name, array_subpin):
     """Append one element to an array pin. Returns True on success."""
     full_pin = f"{node_name}.{array_subpin}"
     try:
-        controller.insert_array_pin(full_pin, -1, "")
+        controller.insert_array_pin(full_pin, -1, "", False)
         return True
     except Exception:
         return False
@@ -148,9 +148,9 @@ def _populate_key_array(controller, model, node_name, array_pin, element_type, n
         _insert_array_pin(controller, node_name, array_pin)
         base = f"{node_name}.{array_pin}.{i}"
         if graph_utils.pin_exists(model, f"{base}.Type"):
-            controller.set_pin_default_value(f"{base}.Type", element_type, True)
+            controller.set_pin_default_value(f"{base}.Type", element_type, True, False)
         if graph_utils.pin_exists(model, f"{base}.Name"):
-            controller.set_pin_default_value(f"{base}.Name", name, True)
+            controller.set_pin_default_value(f"{base}.Name", name, True, False)
     return True
 
 

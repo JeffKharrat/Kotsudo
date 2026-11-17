@@ -581,7 +581,7 @@ def connect_exec(controller, model, source, target):
 
 def set_pin_default(controller, model, pin_path, value):
     if pin_exists(model, pin_path):
-        controller.set_pin_default_value(pin_path, value, True)
+        controller.set_pin_default_value(pin_path, value, True, False, False, False)
 
 
 def set_any_pin(controller, model, node_name, pin_names, value):
@@ -614,6 +614,7 @@ def create_unit_node(controller, model, node_name, script_struct, position, meth
         method_name=method_name,
         position=position,
         node_name=node_name,
+        setup_undo_redo=False,
     )
 
 
@@ -623,7 +624,7 @@ def connect_pins(controller, model, source_pin, target_pin):
 
     link_repr = f"{source_pin} -> {target_pin}"
     if model.find_link(link_repr) is None:
-        controller.add_link(source_pin, target_pin)
+        controller.add_link(source_pin, target_pin, False, False)
     return True
 
 
@@ -1710,8 +1711,14 @@ def create_bone_follow_space(
     return space_name, add_follow_update(controller, model, space_name, bone_name, position, exec_source)
 
 
-def add_follow_update(controller, model, space_name, bone_name, position, exec_source):
-    """The update half: copy the bone's current global onto the null. Returns the new exec tail."""
+def add_follow_update(controller, model, space_name, bone_name, position, exec_source, scale_control=None):
+    """The update half: copy the bone's current global onto the null. Returns the new exec tail.
+
+    ``scale_control``: the control carrying the rig's global scale (Jeffy
+    rig base). Solved bones (IK, splines, ribbons) carry no scale in Unreal,
+    while Maya's joints inherit the rig's; the null then takes its scale
+    from that control, so what hangs from it (a toe on its foot) keeps its
+    offset scaled, as in Maya."""
     get_node = f"{space_name}_GetBone"
     set_node = f"{space_name}_Update"
     create_unit_node(controller, model, get_node, unreal.RigUnit_GetTransform, position)
@@ -1731,8 +1738,25 @@ def add_follow_update(controller, model, space_name, bone_name, position, exec_s
         controller, model, set_node,
         ["bPropagateToChildren", "PropagateToChildren", "propagate_to_children"], "True",
     )
-    if not connect_pins(controller, model, f"{get_node}.Transform", f"{set_node}.Value"):
-        connect_pins(controller, model, f"{get_node}.Transform", f"{set_node}.Transform")
+    value = "Value" if pin_exists(model, f"{set_node}.Value") else "Transform"
+    if scale_control:
+        scale_node = f"{space_name}_GetRigScale"
+        create_unit_node(controller, model, scale_node, unreal.RigUnit_GetTransform,
+                         unreal.Vector2D(position.x, position.y + 200))
+        set_key_pin(controller, model, scale_node, ["Item"], "Control", scale_control)
+        set_any_pin(controller, model, scale_node, ["Space"], "GlobalSpace")
+        set_any_pin(controller, model, scale_node, ["bInitial", "Initial"], "False")
+        linked = all(connect_pins(controller, model, f"{source}.Transform.{part}", f"{set_node}.{value}.{part}")
+                     for source, part in ((get_node, "Translation"), (get_node, "Rotation"),
+                                          (scale_node, "Scale3D")))
+        if not linked:
+            print(f"[RigBuilder] Follow space '{space_name}': rig scale not wired; it follows '{bone_name}' unscaled.")
+            for part in ("Translation", "Rotation", "Scale3D"):
+                if pin_exists(model, f"{set_node}.{value}.{part}"):
+                    controller.break_all_links(f"{set_node}.{value}.{part}", True, False)
+            connect_pins(controller, model, f"{get_node}.Transform", f"{set_node}.{value}")
+    else:
+        connect_pins(controller, model, f"{get_node}.Transform", f"{set_node}.{value}")
     connect_exec(controller, model, exec_source, set_node)
     return set_node
 
@@ -1918,7 +1942,7 @@ def create_solve_stages(controller, model, forwards_solve, stage_names):
     while len(outputs()) < len(stage_names) and guard < len(stage_names):
         guard += 1
         try:
-            controller.add_aggregate_pin(SOLVE_STAGE_NODE, "", "")
+            controller.add_aggregate_pin(SOLVE_STAGE_NODE, "", "", False)
         except Exception:
             break
     pins = outputs()

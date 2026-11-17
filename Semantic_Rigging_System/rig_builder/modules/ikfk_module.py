@@ -509,7 +509,7 @@ class IKFKModule(RigModule):
             _log_node_pins(node, model)
             _log_warning(f"{self.name}: could not wire the IK end-bone rotation; removed.")
             try:
-                controller.remove_node_by_name(node)
+                controller.remove_node_by_name(node, False)
             except Exception:
                 pass
             return None
@@ -1268,6 +1268,7 @@ def _create_variable_getter(controller, model, node_name, var_name, position):
         "0.0",
         position,
         node_name,
+        False,
     )
 
 
@@ -1283,4 +1284,5 @@ def _create_variable_setter(controller, model, node_name, var_name, position):
         "0.0",
         position,
         node_name,
+        False,
     )

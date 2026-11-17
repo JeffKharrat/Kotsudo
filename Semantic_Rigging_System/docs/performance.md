@@ -51,12 +51,24 @@ recompile its whole VM. Measured on a 2,100-node graph:
 back on before the final compile, and always restores it if the build
 fails. The log ends with `Build time: … s`.
 
-Suspending notifications as well is **off** (`FAST_BUILD_SUSPEND_NOTIFICATIONS`
-in `builder.py`): the builder first deletes the previous build's nodes, and
-with notifications suspended the open Control Rig editor is never told.
-On the third such build the editor crashed (access violation in
-CoreUObject right after the graph layout). It is only safe with the rig
-editor closed, for about 30 % more speed.
+### Memory: the editor crashed twice
+
+Two builds in a row crashed the editor (2026-11-17). The second crash
+report is explicit: out of memory, with 94 GiB of virtual memory and
+21 GiB of RAM in use after two builds. Every graph edit recorded an undo
+step (`setup_undo_redo` defaults to true on the RigVM controller), and a
+Control Rig undo step can hold a copy of large parts of the asset: about
+10,000 edits per build. Undo recording off gave no measurable speed, but
+it is the memory. Every graph edit the builder makes now passes
+`setup_undo_redo=False` (the hierarchy controller already defaults to no
+undo). Consequence: a build cannot be undone with Ctrl+Z; rebuild instead.
+
+The first crash (access violation right after the graph layout) was
+probably the same memory pressure. Suspending notifications stays **off**
+anyway (`FAST_BUILD_SUSPEND_NOTIFICATIONS` in `builder.py`): with it on,
+the open Control Rig editor is not told that the previous build's nodes
+were deleted. It is only safe with the rig editor closed, for about 30 %
+more speed.
 
 ## Running Unreal from the command line
 
