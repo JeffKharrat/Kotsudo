@@ -202,6 +202,7 @@ def _parse_modules_from_manifest_data(data):
         _strip_dag_prefix(bone_name): [dict(record) for record in (records or [])]
         for bone_name, records in raw_controller_map.items()
     }
+    module_types = {m.get("module_name"): m.get("module_type") for m in raw_modules}
     result = []
     for raw in raw_modules:
         module_def = {
@@ -231,20 +232,29 @@ def _parse_modules_from_manifest_data(data):
 
         controller_records = []
         seen = set()
-        for bone_name in module_def["chain"]:
-            for record in controller_map.get(bone_name, []):
-                copied = dict(record)
-                for field in ("driven_bone", "anchor_bone", "parent", "source_node"):
-                    if copied.get(field):
-                        copied[field] = _strip_dag_prefix(copied[field])
-                identity = (
-                    copied.get("name"), copied.get("role"), copied.get("module_name"),
-                    copied.get("driven_bone"),
-                )
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                controller_records.append(copied)
+        own_name = module_def["module_name"]
+        own_is_jeffy = str(module_def["module_type"]).startswith("Jeffy.")
+        # Records of this module filed under bones outside its chain (a
+        # ribbon's bend controls sit on the limb joints they follow).
+        candidates = [r for bone_name in module_def["chain"] for r in controller_map.get(bone_name, [])]
+        candidates += [r for recs in controller_map.values() for r in recs if r.get("module_name") == own_name]
+        for record in candidates:
+            other = record.get("module_name")
+            if own_is_jeffy and other and other != own_name \
+                    and str(module_types.get(other, "")).startswith("Jeffy."):
+                continue  # another Jeffy setup's control (e.g. a ribbon's bend control on a limb bone)
+            copied = dict(record)
+            for field in ("driven_bone", "anchor_bone", "parent", "source_node"):
+                if copied.get(field):
+                    copied[field] = _strip_dag_prefix(copied[field])
+            identity = (
+                copied.get("name"), copied.get("role"), copied.get("module_name"),
+                copied.get("driven_bone"),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            controller_records.append(copied)
 
         if controller_records:
             params["controller_records"] = controller_records

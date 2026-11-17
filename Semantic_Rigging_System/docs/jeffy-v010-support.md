@@ -18,6 +18,43 @@ with every node and pin of the Jeffy modules now checked against the UE
 5.6 headers. The pre-export check knows what the Jeffy modules rebuild:
 V010 analyses with 0 errors, 0 to review.
 
+### J3–J5 in Unreal, second run (2026-11-17)
+
+All 31 modules now build and all 87 controls exist. The neck and head
+were turned up to 176° off at rest, and every head child with them.
+Found by driving the open editor from a script (Python remote execution)
+and probing the rig at rest:
+
+- **Spline length read 0.** The "length of spline" picker scanned unit
+  names alphabetically and took *Get Length At Param* (U = 0 by default)
+  before *Get Length*: every chord-walk step was 0. It now asks for
+  `RigUnit_GetLengthControlRigSpline` by name (also used by Kotsudo's
+  Spline IK squash).
+- **Offsets in the wrong frame.** Jeffy's column offsets and half-width
+  vectors are measured in each Maya control's (or joint's) own axes, but
+  Kotsudo builds an Unreal control aligned to its anchor bone (the torso
+  and neck IK controls rest turned −90° about X) and Unreal bones have
+  their own axes. The spline module now re-expresses each offset in the
+  built control's frame (`R_ue⁻¹ · R_maya`, from the record's
+  `world_axes_unreal`); the ribbon expressions turn control and bone
+  transforms back to Maya's axes the same way (bones from the manifest's
+  `rest_pose`). Checked live: the 12 torso and neck spline points land on
+  Maya's pins to 0.0 cm (they were up to 38 cm off).
+- **Ribbon bend controls missing.** A module only received the records
+  filed under its own chain bones; a ribbon's bend controls are filed under
+  the limb joints. A module now also receives every record carrying its
+  name, and a Jeffy module no longer receives another Jeffy setup's records.
+
+Result after the first two fixes: calibration p95 1.2 cm (from 667 cm),
+torso and limbs within 0.1–0.3 cm on every pose. Left at that point: the
+ribbons' second segment flipped 180° under small torso moves and rested
+58–91° off Maya (bone columns in Unreal axes, fixed by the bone frame
+correction above, **not yet confirmed in Unreal**: the editor crashed on
+that build, see `docs/performance.md`), the head about 0.4° off at rest
+(spline samples raised from 32 to 128 per segment to test whether the
+sampled tangent is the cause, not yet confirmed), and the toes 51 cm off
+on the `globalScale` probe only.
+
 ### J3–J5 in Unreal, first run (2026-11-10)
 
 - Rest calibration OK: joints max 0.0019 cm, controls 0.0001 cm.

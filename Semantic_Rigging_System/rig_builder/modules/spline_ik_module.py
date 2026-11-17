@@ -187,12 +187,22 @@ def _axis_string_to_vector_str(axis_name, default="X"):
 
 
 def _pick_get_length_of_spline_unit():
-    """Return the "Get Length Of Spline" unit struct, or None if unavailable."""
-    for candidate in ("RigUnit_GetLengthOfSpline", "RigUnit_SplineLength", "RigUnit_GetSplineLength"):
+    """Return the "Get Length Of Spline" unit struct (the whole curve's
+    length), or None if unavailable.
+
+    UE 5.6 also has "Get Length At Param Of Spline" (length up to U, U = 0 by
+    default): an alphabetical scan found it first and every length read 0,
+    which collapsed the Jeffy spline chord walk (V010 torso, 2026-11-17)."""
+    try:
+        unreal.load_module("ControlRigSpline")
+    except Exception:
+        pass
+    for candidate in ("RigUnit_GetLengthControlRigSpline", "RigUnit_GetLengthOfSpline", "RigUnit_SplineLength",
+                      "RigUnit_GetSplineLength"):
         if hasattr(unreal, candidate):
             return getattr(unreal, candidate)
     for attr in dir(unreal):
-        if attr.startswith("RigUnit_") and "Spline" in attr and "Length" in attr:
+        if attr.startswith("RigUnit_") and "Spline" in attr and "Length" in attr and "AtParam" not in attr:
             if hasattr(unreal, "log"):
                 unreal.log(f"[SplineIKModule] Using Get-Length-Of-Spline unit from broad scan: {attr}.")
             return getattr(unreal, attr)

@@ -41,7 +41,7 @@ from . import spline_ik_module
 
 CHORD_ITERATIONS = 3          # Newton steps of the chord walk per joint
 CHORD_STEP = 0.01             # U step of the secant slope
-SPLINE_SAMPLES = 32
+SPLINE_SAMPLES = 128           # Control Rig samples per spline segment (positions are linear between samples)
 
 
 def _spline_unit(*words):
@@ -60,8 +60,9 @@ def _spline_unit(*words):
 class _Expressions:
     """Transform pins of the matrix expressions the reader exported."""
 
-    def __init__(self, module, graph):
+    def __init__(self, module, graph, recipe_data=None):
         self.module, self.graph = module, graph
+        self.recipe_data = recipe_data
         self.cache = {}
 
     def pin(self, expr):
@@ -72,11 +73,19 @@ class _Expressions:
         graph = self.graph
         if kind == "bone":
             result = graph.get_transform("Bone", str(expr["joint"]))
+            correction = self.module._maya_bone_frame(str(expr["joint"]))
+            if abs(abs(correction[3]) - 1.0) > 1e-6:
+                result = graph.make_absolute(jeffy_math.transform(correction, [0.0, 0.0, 0.0]), result)
         elif kind == "control":
             name = self.module.ue_control(expr["name"])
             if name is None:
                 raise RuntimeError(f"control '{expr['name']}' is not in the rig")
             result = graph.get_control(name)
+            # Jeffy's expressions use the Maya control's axes; the Unreal
+            # control is bone-aligned, so turn its frame back to Maya's.
+            correction = self.module._maya_to_ue_frame(self.recipe_data, expr["name"], name)
+            if abs(abs(correction[3]) - 1.0) > 1e-6:
+                result = graph.make_absolute(jeffy_math.transform(correction, [0.0, 0.0, 0.0]), result)
         elif kind == "lerp":
             a, b = self.pin(expr["a"]), self.pin(expr["b"])
             t = float(expr.get("t", 0.5))
@@ -165,6 +174,30 @@ class _JeffyBase(RigModule):
         return jeffy_math.transform(q, t)
 
 
+    def _maya_bone_frame(self, bone):
+        """Quaternion (xyzw) from the Unreal bone's rest axes to the Maya
+        joint's (the frame Jeffy's offsets and half-width vectors use);
+        identity when the manifest has no rest pose for the joint."""
+        state = (getattr(self.context, "maya_rest_pose", None) or {}).get(bone.split("|")[-1])
+        key = graph_utils.make_key(unreal.RigElementType.BONE, bone)
+        if not state or not state.get("q") or not self.context.hierarchy.contains(key):
+            return [0.0, 0.0, 0.0, 1.0]
+        ue = graph_utils.get_transform_rotation(self.context.hierarchy.get_global_transform(key, True))
+        return jeffy_math.q_mul(jeffy_math.q_inverse([ue.x, ue.y, ue.z, ue.w]), [float(c) for c in state["q"]])
+
+    def _maya_to_ue_frame(self, recipe_data, maya_name, ue_name):
+        """Quaternion (xyzw) taking a vector from the Maya control's axes to
+        the built Unreal control's rest axes (identity when either is unknown)."""
+        record = self.record_named(recipe_data, maya_name)
+        maya = graph_utils.record_rotation(record)
+        key = graph_utils.make_key(unreal.RigElementType.CONTROL, ue_name)
+        if maya is None or not self.context.hierarchy.contains(key):
+            self.context._warn(f"{self.name}: no Maya axes for '{maya_name}'; its offsets are used as they are.")
+            return [0.0, 0.0, 0.0, 1.0]
+        ue = graph_utils.get_transform_rotation(self.context.hierarchy.get_global_transform(key, True))
+        return jeffy_math.q_mul(jeffy_math.q_inverse([ue.x, ue.y, ue.z, ue.w]), [maya.x, maya.y, maya.z, maya.w])
+
+
 class JeffyRibbonModule(_JeffyBase):
     module_type = "Jeffy.ribbon"
     solve_stage = "helpers"      # reads the limb's solved bones
@@ -185,7 +218,7 @@ class JeffyRibbonModule(_JeffyBase):
             self.logger.push(f"[JeffyRibbon] Building {self.name}")
         prefix = graph_utils.sanitize_name(self.name)
         graph = jeffy_math.Graph(self.context, f"{prefix}_Rb")
-        expressions = _Expressions(self, graph)
+        expressions = _Expressions(self, graph, recipe_data)
         hierarchy, hc = self.context.hierarchy, self.context.hierarchy_controller
         self.context.claim_module_column(width=1400)
         base_joints = [str(j) for j in ribbon.get("base_joints") or []]
@@ -318,10 +351,16 @@ class JeffySplineModule(_JeffyBase):
         if any(n is None for n in ik_names):
             raise RuntimeError(f"IK controls not built: {spline.get('ik_controls')}")
         owners = [graph.get_control(n) for n in ik_names]
+        # The columns' offsets are measured in each Maya control's own axes;
+        # the Unreal control is built aligned to its anchor bone instead (the
+        # V010 torso / neck IK controls rest turned -90 deg about X). Re-express
+        # them in the Unreal control's frame: R_ue^-1 * R_maya * offset.
+        to_ue = [self._maya_to_ue_frame(recipe_data, maya_name, ue_name)
+                 for maya_name, ue_name in zip(spline.get("ik_controls") or [], ik_names)]
         points = []
         for column in spline["columns"]:
             owner = owners[int(column["owner"])]
-            local = list(column["local"])
+            local = jeffy_math.q_rotate(to_ue[int(column["owner"])], column["local"])
             if max(abs(c) for c in local) < 1e-9:
                 points.append(f"{owner}.Translation")
             else:
@@ -335,7 +374,8 @@ class JeffySplineModule(_JeffyBase):
         length_unit = spline_ik_module._pick_get_length_of_spline_unit()
         if not (from_points and position_unit and tangent_unit and length_unit):
             raise RuntimeError("the Control Rig Spline nodes are not available (enable the ControlRigSpline plugin)")
-        halves = [graph.rotate_vector(f"{owners[int(c['owner'])]}.Rotation", list(h))
+        halves = [graph.rotate_vector(f"{owners[int(c['owner'])]}.Rotation",
+                                      jeffy_math.q_rotate(to_ue[int(c["owner"])], h))
                   for c, h in zip(spline["columns"], spline.get("cv_half") or [])]
 
         def make_spline(name, point_pins):

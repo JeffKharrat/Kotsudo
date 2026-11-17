@@ -376,6 +376,20 @@ def inverse(value):
     return qi, [-c for c in _q_rotate(qi, t)]
 
 
+def q_mul(a, b):
+    """Hamilton product (xyzw): ``b`` applied first, then ``a``."""
+    return _q_mul(a, b)
+
+
+def q_inverse(q):
+    return [-q[0], -q[1], -q[2], q[3]]
+
+
+def q_rotate(q, v):
+    """Vector ``v`` turned by the unit quaternion ``q`` (xyzw)."""
+    return _q_rotate(q, [float(c) for c in v])
+
+
 def _q_mul(a, b):
     ax, ay, az, aw = a
     bx, by, bz, bw = b

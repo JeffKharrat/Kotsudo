@@ -1,4 +1,5 @@
 import math
+import time
 from typing import Any, cast
 
 try:
@@ -138,6 +139,13 @@ SOLVE_STAGES = ("spaces", "primary", "helpers", "dynamics", "curves")
 # FK must execute before IK/IKFK so FK SetTransform with bPropagateToChildren=True
 # does not overwrite IK-solved bones.
 # IKFKSwitch runs after IKLimb because it internally runs the same IK solve pass.
+# Also pause the rig editor's notifications while building (32 ms instead
+# of 46 ms per graph edit on top of the paused recompile). OFF: with them
+# paused, the open editor is not told that the previous build's nodes were
+# removed, and the editor crashed after a build (access violation,
+# 2026-11-17). Only turn on with the Control Rig editor closed.
+FAST_BUILD_SUSPEND_NOTIFICATIONS = False
+
 MODULE_BUILD_ORDER = {
     "Jeffy.rig_base": -1,      # its controls are space targets of everything else
     "FKChain": 0,
@@ -603,6 +611,59 @@ class RigBuilder:
         )
 
     def run(self):
+        """Build the rig with the Control Rig's automatic VM recompile and
+        editor notifications paused, then compile once.
+
+        Measured on V010 (2026-11-17, 2,100-node graph): every graph edit
+        recompiled the whole VM, about 410 ms per edit, so the build took
+        30 minutes. Paused: 46 ms per edit. Both switches come back before
+        the final compile, and in any case when the build fails."""
+        started = time.time()
+        self._pause_graph_updates()
+        try:
+            return self._run()
+        finally:
+            restored = self._resume_graph_updates()
+            if restored and self.rig is not None:
+                self.compile_rig()
+            self.logger.log(f"[RigBuilder] Build time: {time.time() - started:.1f} s.")
+
+    def _pause_graph_updates(self):
+        self._paused = {}
+        rig = self.rig
+        if rig is None:
+            return
+        try:
+            self._paused["auto_recompile"] = rig.get_auto_vm_recompile()
+            rig.set_auto_vm_recompile(False)
+        except Exception:
+            pass
+        if FAST_BUILD_SUSPEND_NOTIFICATIONS:
+            try:
+                rig.suspend_notifications(True)
+                self._paused["notifications"] = True
+            except Exception:
+                pass
+
+    def _resume_graph_updates(self):
+        """Undo _pause_graph_updates; True when something was restored."""
+        paused, self._paused = getattr(self, "_paused", {}) or {}, {}
+        rig = self.rig
+        if rig is None or not paused:
+            return False
+        if paused.get("notifications"):
+            try:
+                rig.suspend_notifications(False)
+            except Exception:
+                pass
+        if "auto_recompile" in paused:
+            try:
+                rig.set_auto_vm_recompile(paused["auto_recompile"])
+            except Exception:
+                pass
+        return True
+
+    def _run(self):
         source_asset = self.load_source_asset()
         skeleton = self.resolve_skeleton(source_asset)
         skeletal_mesh = source_asset if isinstance(source_asset, unreal.SkeletalMesh) else None
@@ -716,6 +777,9 @@ class RigBuilder:
             )
             self.apply_maya_rest_pose(context)
             manifest = self.manifest or {}
+            # Maya's world frame of every joint at rest (Unreal axes): the
+            # matrix-rig modules turn Unreal bone frames back to it.
+            context.maya_rest_pose = manifest.get("rest_pose") or {}
             context.settings_records = {r["name"]: r for r in manifest.get("settings_controls") or [] if r.get("name")}
             context.settings_shapes = {
                 r["shape_id"]: (manifest.get("control_shapes") or {}).get(r["shape_id"])
@@ -811,6 +875,7 @@ class RigBuilder:
         self.logger.pop()
 
         if built_modules and self.rig:
+            self._resume_graph_updates()
             self.logger.log("[RigBuilder] Compiling rig")
             self.compile_rig()
             if context and self.bake_rest_corrections(context):

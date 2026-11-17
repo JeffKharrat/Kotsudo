@@ -4319,7 +4319,29 @@ def read_fbx_model_names(fbx_path):
         data = handle.read()
     if not data.startswith(b"Kaydara FBX Binary"):
         raise RuntimeError("Cannot verify '{}': not a binary FBX.".format(fbx_path))
-    return [m.decode("ascii") for m in _FBX_MODEL_NAME_RE.findall(data)]
+    return _fbx_model_names(data)
+
+
+_FBX_MODEL_TAG = b"\x00\x01Model"
+
+
+def _fbx_model_names(data):
+    """The printable run right before every ``\x00\x01Model`` tag.
+
+    Same result as ``_FBX_MODEL_NAME_RE.findall`` but linear: the regex
+    backtracked over every long printable run (the manifest JSON stored in
+    the FBX is 1.4 MB of text on V010) and took 30 minutes per file."""
+    names, start = [], 0
+    while True:
+        tag = data.find(_FBX_MODEL_TAG, start)
+        if tag < 0:
+            return names
+        begin = tag
+        while begin > start and 0x20 <= data[begin - 1] <= 0x7E:
+            begin -= 1
+        if begin < tag:
+            names.append(data[begin:tag].decode("ascii"))
+        start = tag + len(_FBX_MODEL_TAG)
 
 
 def verify_exported_fbx(fbx_path, manifest):
