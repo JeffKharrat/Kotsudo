@@ -825,3 +825,19 @@ def run_after_build(rig_blueprint, assets, manifest):
     except Exception as exc:
         _warn(f"Pose check failed to run ({type(exc).__name__}: {exc}); the rig build is unaffected.")
         return None
+    finally:
+        release_rig_instances()
+
+
+def release_rig_instances():
+    """Collect the transient Control Rig instances the check created.
+
+    Each instance stays bound to the blueprint until garbage collection,
+    and copies the rig hierarchy on every hierarchy edit of the next build;
+    collection cannot run while a Python build holds the editor. Leftover
+    instances took the editor out of memory on the third build in a row
+    (2026-11-17)."""
+    try:
+        unreal.SystemLibrary.collect_garbage()
+    except Exception as exc:
+        _warn(f"Garbage collection after the pose check failed: {exc}")

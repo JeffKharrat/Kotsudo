@@ -63,6 +63,17 @@ it is the memory. Every graph edit the builder makes now passes
 `setup_undo_redo=False` (the hierarchy controller already defaults to no
 undo). Consequence: a build cannot be undone with Ctrl+Z; rebuild instead.
 
+With undo off, two builds in a row stayed flat (+0.8 GiB for the second),
+but the third crashed again: 11 GiB to 55 GiB within a minute of
+"Building modules", the failing allocations about 7 MB each, the size of a
+rig hierarchy copy. Likely cause (not yet confirmed): every pose check,
+and every probe run from a script, creates a transient Control Rig
+instance from the blueprint; until garbage collection runs, each one
+re-copies the hierarchy on every hierarchy edit of the next build, and
+collection cannot run while a Python build holds the editor. The pose
+check now forces garbage collection when it ends, and the builder before
+it starts (`pose_harness.release_rig_instances`).
+
 The first crash (access violation right after the graph layout) was
 probably the same memory pressure. Suspending notifications stays **off**
 anyway (`FAST_BUILD_SUSPEND_NOTIFICATIONS` in `builder.py`): with it on,

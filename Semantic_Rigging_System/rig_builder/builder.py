@@ -620,6 +620,12 @@ class RigBuilder:
         30 minutes. Paused: 46 ms per edit. Both switches come back before
         the final compile, and in any case when the build fails."""
         started = time.time()
+        # Free transient rig instances left by earlier pose checks or probes
+        # before the hierarchy edits start (see pose_harness.release_rig_instances).
+        try:
+            unreal.SystemLibrary.collect_garbage()
+        except Exception:
+            pass
         self._pause_graph_updates()
         try:
             return self._run()

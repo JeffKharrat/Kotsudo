@@ -75,6 +75,7 @@ class Graph:
         self.count = 0
         self.nodes = []
         self.missing = []
+        self._rig_scale_pin = None
 
     # -- nodes ---------------------------------------------------------------
     def node(self, names, suffix=None):
@@ -313,6 +314,29 @@ class Graph:
         graph_utils.set_any_pin(self.controller, self.model, node, ["bPropagateToChildren", "PropagateToChildren"],
                                 "True" if propagate else "False")
         self.feed(node, ["Value", "Transform"], value)
+        tail = self.context.get_exec_tail() or graph_utils.find_forwards_solve_node_name(self.model)
+        graph_utils.connect_exec(self.controller, self.model, tail, node)
+        self.context.set_exec_tail(node)
+        return node
+
+    def apply_rig_scale(self, bone):
+        """Give a solved bone the rig's global scale (Set Scale, global, no
+        propagation): Maya's joints inherit the rig scale, while a bone set
+        from an aim / IK result has scale 1 -- and a control following it
+        (a toe on its foot) or the skin on it would not scale."""
+        control = getattr(self.context, "rig_scale_control", None)
+        if not control:
+            return None
+        if self._rig_scale_pin is None:
+            self._rig_scale_pin = f"{self.get_control(control)}.Scale3D"
+        node = self.node(("SetScale",), "RigScale")
+        graph_utils.set_key_pin(self.controller, self.model, node, ["Item"], "Bone", bone)
+        graph_utils.set_any_pin(self.controller, self.model, node, ["Space"], "GlobalSpace")
+        graph_utils.set_any_pin(self.controller, self.model, node, ["bInitial", "Initial"], "False")
+        self.feed(node, ["Weight"], 1.0)
+        graph_utils.set_any_pin(self.controller, self.model, node, ["bPropagateToChildren", "PropagateToChildren"],
+                                "False")
+        self.feed(node, ["Scale"], self._rig_scale_pin)
         tail = self.context.get_exec_tail() or graph_utils.find_forwards_solve_node_name(self.model)
         graph_utils.connect_exec(self.controller, self.model, tail, node)
         self.context.set_exec_tail(node)
