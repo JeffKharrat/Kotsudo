@@ -321,9 +321,8 @@ class Graph:
 
     def apply_rig_scale(self, bone):
         """Give a solved bone the rig's global scale (Set Scale, global, no
-        propagation): Maya's joints inherit the rig scale, while a bone set
-        from an aim / IK result has scale 1 -- and a control following it
-        (a toe on its foot) or the skin on it would not scale."""
+        propagation), for the bones that carry it in Maya: a limb's end joint.
+        A control following that bone (the toe on its foot) then scales too."""
         control = getattr(self.context, "rig_scale_control", None)
         if not control:
             return None

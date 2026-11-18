@@ -260,7 +260,6 @@ class JeffyRibbonModule(_JeffyBase):
                 aim = self.pin_frame_pins(graph, columns, pin["weights"], pin["d_weights"], halves, frame)
                 joint = graph.make_absolute(self.joint_offset(bone, pin.get("pin_rest")), aim)
                 graph.set_transform("Bone", bone, joint, propagate=False)
-                graph.apply_rig_scale(bone)
                 nodes += 1
 
         # 3. bendyVis on the limb's settings control shows / hides the bend controls.
@@ -455,7 +454,6 @@ class JeffySplineModule(_JeffyBase):
             if chain_mode and bone in fk_pins:
                 final = graph.tlerp(fk_pins[bone], ik_pose, switch if switch is not None else 1.0)
             graph.set_transform("Bone", bone, final, propagate=True)
-            graph.apply_rig_scale(bone)
             previous = position
         if self.logger:
             self.logger.log(f"[JeffySpline] {self.name} ({spline.get('mode')}): {len(pins)} joint(s) on a "

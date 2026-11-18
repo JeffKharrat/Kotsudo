@@ -109,8 +109,7 @@ class JeffyRigBaseModule(FKModule):
             tail = self.context.get_exec_tail() or graph_utils.find_forwards_solve_node_name(model)
             graph_utils.connect_exec(controller, model, tail, setter)
             self.context.set_exec_tail(setter)
-            # Bones the Jeffy modules solve (IK, splines, ribbons) take the
-            # rig scale from here, as Maya's joints inherit it.
+            # A limb's end bone takes the rig scale from here, as in Maya.
             self.context.rig_scale_control = control_name
             if self.logger:
                 self.logger.log(f"[JeffyRigBase] '{control_name}': globalScale scales the control.")
@@ -150,12 +149,12 @@ class JeffyIKFKLimbModule(IKFKModule):
 
     def build(self):
         result = super().build()
-        # Maya's limb joints inherit the rig scale; the IK solve leaves the
-        # mid and end bones at scale 1 (the toes on the foot did not scale).
+        # Measured in Maya under globalScale = 2: of a limb, only the END joint
+        # carries the rig scale (the hand / foot, and through it the toe that
+        # follows it); the root, the middle and the ribbons stay at 1.
         if getattr(self.context, "rig_scale_control", None):
             graph = jeffy_math.Graph(self.context, f"{graph_utils.sanitize_name(self.name)}_RigScale")
-            for bone in self.chain:
-                graph.apply_rig_scale(str(bone).split("|")[-1])
+            graph.apply_rig_scale(str(self.chain[-1]).split("|")[-1])
         return result
 
     def read_recipe(self):

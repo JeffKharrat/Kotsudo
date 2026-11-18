@@ -147,6 +147,37 @@ SOLVE_STAGES = ("spaces", "primary", "helpers", "dynamics", "curves")
 # docs/performance.md.)
 FAST_BUILD_SUSPEND_NOTIFICATIONS = False
 
+# Stop a build cleanly before the editor runs out of memory (private GiB of
+# the editor process): a stopped build can be rerun, a crash loses the session.
+BUILD_MEMORY_LIMIT_GIB = 45.0
+
+
+def editor_memory_gib():
+    """Private memory of this process in GiB, or None when unavailable."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+                        ("PrivateUsage", ctypes.c_size_t)]
+
+        counters = Counters()
+        counters.cb = ctypes.sizeof(Counters)
+        kernel32 = ctypes.WinDLL("kernel32")
+        psapi = ctypes.WinDLL("psapi")
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        if psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            return counters.PrivateUsage / (1024.0 ** 3)
+    except Exception:
+        pass
+    return None
+
 MODULE_BUILD_ORDER = {
     "Jeffy.rig_base": -1,      # its controls are space targets of everything else
     "FKChain": 0,
@@ -633,7 +664,9 @@ class RigBuilder:
             restored = self._resume_graph_updates()
             if restored and self.rig is not None:
                 self.compile_rig()
-            self.logger.log(f"[RigBuilder] Build time: {time.time() - started:.1f} s.")
+            memory = editor_memory_gib()
+            self.logger.log(f"[RigBuilder] Build time: {time.time() - started:.1f} s"
+                            + (f", editor memory {memory:.1f} GiB." if memory is not None else "."))
 
     def _pause_graph_updates(self):
         self._paused = {}
@@ -844,6 +877,12 @@ class RigBuilder:
                 context.mark_failed(module_name)
                 continue
 
+            memory = editor_memory_gib()
+            if memory is not None and memory > BUILD_MEMORY_LIMIT_GIB:
+                raise RuntimeError(
+                    f"Build stopped before '{module_name}': the editor uses {memory:.1f} GiB "
+                    f"(limit {BUILD_MEMORY_LIMIT_GIB:.0f}). Save, restart the editor and build again."
+                )
             context.begin_stage(getattr(module_instance, "solve_stage", "primary"))
             try:
                 module_instance.validate()

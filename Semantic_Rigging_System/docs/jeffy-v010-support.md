@@ -56,17 +56,16 @@ per segment (was 32): the 40 ribbon joints rest within 0.5° / 0.34 cm of
 Maya (the limb bone itself is 0.36° off), no flips on any pose (worst
 0.27°), calibration p95 0.34 cm (head children; was 1.2 cm), every module
 within about 1 cm / 0.3° on all 634 poses. Left: the toes, 51 cm off on
-the `globalScale` probe only. Cause: the toe's space follows the foot bone,
-and solved bones (IK, splines, ribbons) carry no scale in Unreal while
-Maya's joints inherit the rig's, so the toe's offset did not double. Measured
-live: under `globalScale` = 2 the FK-driven bones (root, petals, eyes, limb
-roots, toes) carry scale 2, the solved ones (spline, IK mid / end, ribbon
-joints) scale 1, while every Maya joint carries 2 (so those skin parts
-would not scale either). Scaling the follow spaces instead overshot
-(hundreds of cm on other modules). Fix: the Jeffy spline, ribbon and limb
-modules set the rig scale on the bones they solve (`Graph.apply_rig_scale`,
-from `context.rig_scale_control`); **not yet confirmed in Unreal** (the
-editor ran out of memory on that build, see `docs/performance.md`).
+the `globalScale` probe only.
+
+Measured in Maya with `globalScale` = 2: only 7 joints carry the scale
+(`Root`, both `ArmLeaf3`, both `LegLeaf3`, both `LegLeaf5`); the other 110
+stay at 1, and the limbs keep their rest length. The toe follows the foot,
+so its offset doubles. Fix: each limb's end bone takes the rig scale
+(`Graph.apply_rig_scale`, from `context.rig_scale_control`) and nothing
+else does. Scaling the follow spaces, then every solved bone, were both
+tried first and broke the limbs (the hip then read scale 2 and doubled the
+leg lengths). **Not yet confirmed in Unreal.**
 
 ### J3–J5 in Unreal, first run (2026-11-10)
 

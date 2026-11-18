@@ -155,12 +155,15 @@ def _stats(values):
 # ---------------------------------------------------------------------------
 
 def _make_rig_instance(rig_blueprint):
-    """A Control Rig object to drive: a fresh instance when the API offers
-    one, else the editor's preview/debug instance (reset before every pose,
-    so replaying on it is equally valid)."""
+    """A Control Rig object to drive: the editor's own preview/debug instance
+    (reset before every pose and after the check), else a new one.
+
+    A new instance is created inside the blueprint and stays alive with it;
+    leftover instances took the editor out of memory on repeated builds
+    (2026-11-17), so one is only created when the editor has none."""
     tried = []
-    for getter in ("create_control_rig", "get_preview_instance", "get_debugged_control_rig",
-                   "get_object_being_debugged"):
+    for getter in ("get_debugged_control_rig", "get_preview_instance", "get_object_being_debugged",
+                   "create_control_rig"):
         method = getattr(rig_blueprint, getter, None)
         if method is None:
             continue
@@ -307,6 +310,18 @@ def run(rig_blueprint, poses_path, manifest=None, report_path=None):
         raise RuntimeError(f"{poses_path}: no rest pose; re-export from Maya.")
 
     instance = RigInstance(rig_blueprint)
+    try:
+        return _run_poses(instance, document, poses, poses_path, manifest, report_path)
+    finally:
+        # The editor's own instance goes back to the rest pose.
+        try:
+            instance.reset()
+            instance.run()
+        except Exception as exc:
+            _warn(f"Could not reset the rig after the pose check: {exc}")
+
+
+def _run_poses(instance, document, poses, poses_path, manifest, report_path):
     rest = poses[0]
     module_of = {}
     for module in (manifest or {}).get("modules") or []:
