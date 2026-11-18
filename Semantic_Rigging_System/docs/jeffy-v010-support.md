@@ -68,6 +68,25 @@ tried first and broke the limbs (the hip then read scale 2 and doubled the
 leg lengths). Confirmed in Unreal: the toes are within 0.08 cm of Maya on
 that probe, and only those bones carry the scale.
 
+### Rest calibration (2026-11-18)
+
+The pose check's calibration now passes on V010: joints at rest are within
+0.0057 cm of Maya (p95 0.0033 cm, it was 0.34 cm).
+
+- Control Rig's spline shifts U by `KINDA_SMALL_NUMBER`, so the curve stops
+  0.076 cm short of both ends, and its tangent is sampled. Each Jeffy spline
+  bone now carries a constant offset on its IK result.
+- Jeffy's bind pose keeps the elbow of the nearly straight arm 0.18 cm off the
+  solved one. The limb's middle bone carries the same kind of offset, blended
+  by `ikFk` so FK is untouched.
+- The builder's rest bake repeats until nothing moves (three passes on V010):
+  the neck follows the chest, so it is only right once the chest is.
+
+Left above T1: motion error on poses, at most 1.3 cm on the arm ribbons and
+1.1 cm on the petal tips; one near-straight leg pose reaches 2.2 cm, which the
+check attributes to the straight knee. Kotsudo's own Spline IK uses the same
+bake and has not been rebuilt on V06 since this change.
+
 ### J3–J5 in Unreal, first run (2026-11-10)
 
 - Rest calibration OK: joints max 0.0019 cm, controls 0.0001 cm.

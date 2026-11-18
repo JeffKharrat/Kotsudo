@@ -152,10 +152,30 @@ class JeffyIKFKLimbModule(IKFKModule):
         # Measured in Maya under globalScale = 2: of a limb, only the END joint
         # carries the rig scale (the hand / foot, and through it the toe that
         # follows it); the root, the middle and the ribbons stay at 1.
+        graph = jeffy_math.Graph(self.context, f"{graph_utils.sanitize_name(self.name)}_RigScale")
+        self._correct_middle_bone(graph)
         if getattr(self.context, "rig_scale_control", None):
-            graph = jeffy_math.Graph(self.context, f"{graph_utils.sanitize_name(self.name)}_RigScale")
             graph.apply_rig_scale(str(self.chain[-1]).split("|")[-1])
         return result
+
+    def _correct_middle_bone(self, graph):
+        """In IK, a constant offset on the middle joint, measured after the
+        compile (the builder's rest bake): Jeffy's bind pose keeps the joint
+        of a nearly straight limb slightly off the solved one (0.18 cm on
+        V010's arms). FK is left as it is."""
+        limb = self.read_recipe().get("Limb") or {}
+        settings = limb.get("settings_control")
+        if len(self.chain) != 3 or not settings:
+            return
+        bone = str(self.chain[1]).split("|")[-1]
+        solved = graph.get_transform("Bone", bone)
+        corrected = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), solved)
+        graph.set_transform("Bone", bone, graph.tlerp(solved, corrected, graph.channel(settings, "ikFk", 1.0)),
+                            propagate=False)
+        registry = getattr(self.context, "rest_corrections", None)
+        if registry is None:
+            registry = self.context.rest_corrections = []
+        registry.append((bone, corrected.rsplit(".", 1)[0]))
 
     def read_recipe(self):
         data = super().read_recipe()

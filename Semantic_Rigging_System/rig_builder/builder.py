@@ -150,6 +150,8 @@ FAST_BUILD_SUSPEND_NOTIFICATIONS = True
 # the editor process): a stopped build can be rerun, a crash loses the session.
 BUILD_MEMORY_LIMIT_GIB = 45.0
 REOPEN_EDITOR_AFTER_FRAMES = 10
+REST_BAKE_MAX_PASSES = 4
+REST_BAKE_TOLERANCE_CM = 0.001
 
 
 def editor_memory_gib():
@@ -1022,32 +1024,48 @@ class RigBuilder:
     def bake_rest_corrections(self, context):
         """Measure where the solved rig puts each rest-corrected bone at rest
         and store the offset that brings it back onto the bind pose.
+
+        Repeats until nothing moves: a chain that follows another corrected
+        chain (the neck on the chest) is only right once its parent is.
         Returns True when pin defaults changed (the rig must recompile)."""
         corrections = getattr(context, "rest_corrections", None) or []
         if not corrections:
             return False
-        try:
-            from . import pose_harness
-            instance = pose_harness.RigInstance(self.rig)
-            instance.reset()
-            for _ in range(3):
-                instance.run()
-        except Exception as exc:
-            self.logger.log(f"[RigBuilder] Rest correction skipped (rig could not be evaluated: {exc}).")
-            return False
-        worst = 0.0
-        for bone, node in corrections:
-            key = instance.key("BONE", bone)
-            if key is None:
-                continue
-            solved = instance.global_transform(key)
-            initial = instance.global_transform(key, True)
-            offset = unreal.MathLibrary.compose_transforms(initial, unreal.MathLibrary.invert_transform(solved))
-            worst = max(worst, graph_utils.vector_length(graph_utils.vector_sub(
-                graph_utils.transform_to_location(solved), graph_utils.transform_to_location(initial))))
-            graph_utils.set_pin_default(context.graph_controller, context.model, f"{node}.Local",
-                                        graph_utils.transform_pin_string(offset))
-        self.logger.log(f"[RigBuilder] Spline rest correction baked for {len(corrections)} bone(s) "
-                        f"(largest rest offset {worst:.4f} cm).")
-        return True
+        offsets = {node: unreal.Transform() for _, node in corrections}
+        changed = False
+        for attempt in range(1, REST_BAKE_MAX_PASSES + 1):
+            if changed:
+                self.compile_rig()
+            try:
+                from . import pose_harness
+                instance = pose_harness.RigInstance(self.rig)
+                instance.reset()
+                for _ in range(3):
+                    instance.run()
+            except Exception as exc:
+                self.logger.log(f"[RigBuilder] Rest correction skipped (rig could not be evaluated: {exc}).")
+                return changed
+            worst = 0.0
+            measured = []
+            for bone, node in corrections:
+                key = instance.key("BONE", bone)
+                if key is None:
+                    continue
+                solved = instance.global_transform(key)
+                initial = instance.global_transform(key, True)
+                worst = max(worst, graph_utils.vector_length(graph_utils.vector_sub(
+                    graph_utils.transform_to_location(solved), graph_utils.transform_to_location(initial))))
+                measured.append((node, unreal.MathLibrary.compose_transforms(
+                    unreal.MathLibrary.compose_transforms(initial, unreal.MathLibrary.invert_transform(solved)),
+                    offsets[node])))
+            self.logger.log(f"[RigBuilder] Spline rest correction, pass {attempt}: {len(measured)} bone(s), "
+                            f"largest rest offset {worst:.4f} cm.")
+            if worst < REST_BAKE_TOLERANCE_CM:
+                break
+            for node, offset in measured:
+                offsets[node] = offset
+                graph_utils.set_pin_default(context.graph_controller, context.model, f"{node}.Local",
+                                            graph_utils.transform_pin_string(offset))
+            changed = True
+        return changed
 

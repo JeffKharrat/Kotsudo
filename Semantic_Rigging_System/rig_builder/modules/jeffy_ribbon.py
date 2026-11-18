@@ -429,6 +429,9 @@ class JeffySplineModule(_JeffyBase):
                 switch = graph.channel(spline["settings_control"], "ikFk", 1.0)
             except Exception as exc:
                 self.context._warn(f"{self.name}: ikFk not found ({exc}); the chain stays in IK.")
+        rest_corrections = getattr(self.context, "rest_corrections", None)
+        if rest_corrections is None:
+            rest_corrections = self.context.rest_corrections = []
         for index, pin in enumerate(pins):
             bone = str(pin["joint"])
             if index == 0:
@@ -450,6 +453,11 @@ class JeffySplineModule(_JeffyBase):
             aim = graph.aim(graph.make_transform(position), list(frame["tangent_axis"]), tangent,
                             list(frame["width_axis"]), width, primary_is_direction=True)
             ik_pose = graph.make_absolute(self.joint_offset(bone, pin.get("pin_rest")), aim)
+            # Constant offset measured after the compile (builder's rest bake):
+            # Control Rig's spline stops just short of its ends (KINDA_SMALL_NUMBER
+            # on U, 0.076 cm on the V010 torso) and its tangent is sampled.
+            ik_pose = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), ik_pose)
+            rest_corrections.append((bone, ik_pose.rsplit(".", 1)[0]))
             final = ik_pose
             if chain_mode and bone in fk_pins:
                 final = graph.tlerp(fk_pins[bone], ik_pose, switch if switch is not None else 1.0)
