@@ -139,13 +139,12 @@ SOLVE_STAGES = ("spaces", "primary", "helpers", "dynamics", "curves")
 # FK must execute before IK/IKFK so FK SetTransform with bPropagateToChildren=True
 # does not overwrite IK-solved bones.
 # IKFKSwitch runs after IKLimb because it internally runs the same IK solve pass.
-# Also pause the rig editor's notifications while building (32 ms instead
-# of 46 ms per graph edit on top of the paused recompile). OFF: with them
-# paused, the open editor is not told that the previous build's nodes were
-# removed. Only turn on with the Control Rig editor closed. (The 2026-11-17
-# editor crashes were out of memory from undo recording, now off: see
-# docs/performance.md.)
-FAST_BUILD_SUSPEND_NOTIFICATIONS = False
+# Pause the blueprint's notifications while building: every graph edit otherwise
+# copies the rig hierarchy (7.3 MB) to the live rig instances, up to six times,
+# and the copies are held until the Python call returns (58 GiB on a rebuild of
+# V010, 2026-11-18). Paused, an edit takes 1 ms instead of 16 ms. Resuming makes
+# the engine rebuild the visual graph from the model and refresh the editor.
+FAST_BUILD_SUSPEND_NOTIFICATIONS = True
 
 # Stop a build cleanly before the editor runs out of memory (private GiB of
 # the editor process): a stopped build can be rerun, a crash loses the session.
@@ -664,9 +663,11 @@ class RigBuilder:
             restored = self._resume_graph_updates()
             if restored and self.rig is not None:
                 self.compile_rig()
+            self._reopen_rig_editor()
             memory = editor_memory_gib()
             self.logger.log(f"[RigBuilder] Build time: {time.time() - started:.1f} s"
-                            + (f", editor memory {memory:.1f} GiB." if memory is not None else "."))
+                            + (f", editor memory {memory:.1f} GiB (peak {max(memory, getattr(self, '_peak_memory', 0.0)):.1f})."
+                               if memory is not None else "."))
 
     def _pause_graph_updates(self):
         self._paused = {}
@@ -679,11 +680,36 @@ class RigBuilder:
         except Exception:
             pass
         if FAST_BUILD_SUSPEND_NOTIFICATIONS:
+            self._close_rig_editor()
             try:
                 rig.suspend_notifications(True)
                 self._paused["notifications"] = True
             except Exception:
                 pass
+
+    def _close_rig_editor(self):
+        """Close the rig's editor tab for the build (reopened afterwards).
+
+        Resuming notifications rebuilds the visual graph; an open graph panel
+        then paints widgets of the old nodes and the editor crashes
+        (UStruct::IsChildOf on a null pin type, GraphEditor, 2026-11-18)."""
+        self._reopen_rig_editor_after = False
+        try:
+            subsystem = unreal.get_editor_subsystem(unreal.AssetEditorSubsystem)
+            if self.rig in (subsystem.get_all_edited_assets() or []):
+                subsystem.close_all_editors_for_asset(self.rig)
+                self._reopen_rig_editor_after = True
+        except Exception as exc:
+            self.warn(f"Could not close the Control Rig editor for the build: {exc}")
+
+    def _reopen_rig_editor(self):
+        if not getattr(self, "_reopen_rig_editor_after", False):
+            return
+        self._reopen_rig_editor_after = False
+        try:
+            unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).open_editor_for_assets([self.rig])
+        except Exception as exc:
+            self.warn(f"Could not reopen the Control Rig editor: {exc}")
 
     def _resume_graph_updates(self):
         """Undo _pause_graph_updates; True when something was restored."""
@@ -878,6 +904,8 @@ class RigBuilder:
                 continue
 
             memory = editor_memory_gib()
+            if memory is not None:
+                self._peak_memory = max(getattr(self, "_peak_memory", 0.0), memory)
             if memory is not None and memory > BUILD_MEMORY_LIMIT_GIB:
                 raise RuntimeError(
                     f"Build stopped before '{module_name}': the editor uses {memory:.1f} GiB "

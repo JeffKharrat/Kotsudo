@@ -65,7 +65,8 @@ so its offset doubles. Fix: each limb's end bone takes the rig scale
 (`Graph.apply_rig_scale`, from `context.rig_scale_control`) and nothing
 else does. Scaling the follow spaces, then every solved bone, were both
 tried first and broke the limbs (the hip then read scale 2 and doubled the
-leg lengths). **Not yet confirmed in Unreal.**
+leg lengths). Confirmed in Unreal: the toes are within 0.08 cm of Maya on
+that probe, and only those bones carry the scale.
 
 ### J3–J5 in Unreal, first run (2026-11-10)
 

@@ -9,7 +9,7 @@ Measured on Murakami V010 (Jeffy matrix rig, 117 joints, 87 controls,
 |---|---|---|---|
 | Maya: rig FBX + manifest + 635 test poses | ~60 min | 36 s | FBX check regex (below) |
 | Maya: each animation clip (49 frames) | ~30 min | seconds | same regex, run once per clip |
-| Unreal: graph build (31 modules) | 30 min | 8.5 min (5.5 min with notifications also paused, unsafe) | VM recompile after every graph edit |
+| Unreal: graph build (31 modules) | 30 min | 4.4 min | VM recompile and hierarchy copies on every graph edit |
 | Unreal: pose check (634 poses) | 2 s | 2 s | — |
 
 ### Maya: one regular expression
@@ -51,35 +51,30 @@ recompile its whole VM. Measured on a 2,100-node graph:
 back on before the final compile, and always restores it if the build
 fails. The log ends with `Build time: … s`.
 
-### Memory: the editor crashed twice
+### Memory and crashes on repeated builds
 
-Two builds in a row crashed the editor (2026-11-17). The second crash
-report is explicit: out of memory, with 94 GiB of virtual memory and
-21 GiB of RAM in use after two builds. Every graph edit recorded an undo
-step (`setup_undo_redo` defaults to true on the RigVM controller), and a
-Control Rig undo step can hold a copy of large parts of the asset: about
-10,000 edits per build. Undo recording off gave no measurable speed, but
-it is the memory. Every graph edit the builder makes now passes
-`setup_undo_redo=False` (the hierarchy controller already defaults to no
-undo). Consequence: a build cannot be undone with Ctrl+Z; rebuild instead.
+Repeat builds ran the editor out of memory (up to 107 GiB virtual). Measured
+per edit on V010: adding a graph node held 43.6 MB, removing one 14.5 MB and
+adding a null 7.3 MB, all multiples of one copy of the rig hierarchy (7.3 MB).
+The blueprint's change notifications copy the hierarchy to the live rig
+instances, and the copies are only released when the Python call returns, so
+neither garbage collection nor ending transactions freed them mid-build.
 
-With undo off, two builds in a row stayed flat (+0.8 GiB for the second),
-but later repeat builds still ran out of memory, once from 11 GiB to 55 GiB
-within a minute, the failing allocations about 7 MB each. Forcing garbage
-collection did not cure it. Likely cause (not yet confirmed): the pose check
-and every scripted probe created a Control Rig instance with
-`create_control_rig`, which lives inside the blueprint (`NewObject(this, …)`).
-The check now reuses the editor's own preview / debug instance and resets
-it afterwards. As a safety net the builder stops cleanly before a module
-when the editor passes 45 GiB (`BUILD_MEMORY_LIMIT_GIB`), and the log's
-last line gives the editor's memory.
+The fix is the engine's bulk-edit mode, `suspend_notifications(True)`
+(`FAST_BUILD_SUSPEND_NOTIFICATIONS` in `builder.py`):
 
-The first crash (access violation right after the graph layout) was
-probably the same memory pressure. Suspending notifications stays **off**
-anyway (`FAST_BUILD_SUSPEND_NOTIFICATIONS` in `builder.py`): with it on,
-the open Control Rig editor is not told that the previous build's nodes
-were deleted. It is only safe with the rig editor closed, for about 30 %
-more speed.
+| Three builds in a row | Notifications on | Paused |
+|---|---|---|
+| Time per graph edit | 16 ms | 1 ms |
+| Editor memory, peak | 58 GiB, then stopped | 10.4 GiB |
+| Build time | 7 min | 4.4 min |
+
+Resuming rebuilds the visual graph from the model. An open graph panel then
+paints widgets of the old nodes and the editor crashes (`UStruct::IsChildOf`
+in GraphEditor), so the builder closes the rig's editor tab during the build
+and reopens it afterwards. Other safeguards: graph edits record no undo (a
+build is undone by rebuilding), the pose check reuses the editor's rig
+instance, and a build stops cleanly above 45 GiB (`BUILD_MEMORY_LIMIT_GIB`).
 
 ## Running Unreal from the command line
 
