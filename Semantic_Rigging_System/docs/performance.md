@@ -9,7 +9,7 @@ Measured on Murakami V010 (Jeffy matrix rig, 117 joints, 87 controls,
 |---|---|---|---|
 | Maya: rig FBX + manifest + 635 test poses | ~60 min | 36 s | FBX check regex (below) |
 | Maya: each animation clip (49 frames) | ~30 min | seconds | same regex, run once per clip |
-| Unreal: graph build (31 modules) | 30 min | 4.4 min | VM recompile and hierarchy copies on every graph edit |
+| Unreal: graph build (31 modules) | 30 min | 4.6 min | VM recompile and hierarchy copies on every graph edit |
 | Unreal: pose check (634 poses) | 2 s | 2 s | — |
 
 ### Maya: one regular expression
@@ -66,13 +66,14 @@ The fix is the engine's bulk-edit mode, `suspend_notifications(True)`
 | Three builds in a row | Notifications on | Paused |
 |---|---|---|
 | Time per graph edit | 16 ms | 1 ms |
-| Editor memory, peak | 58 GiB, then stopped | 10.4 GiB |
-| Build time | 7 min | 4.4 min |
+| Editor memory, peak | 58 GiB, then stopped | 6.6 GiB, flat over the three builds |
+| Build time | 7 min | 4.6 min |
 
 Resuming rebuilds the visual graph from the model. An open graph panel then
 paints widgets of the old nodes and the editor crashes (`UStruct::IsChildOf`
 in GraphEditor), so the builder closes the rig's editor tab during the build
-and reopens it afterwards. Other safeguards: graph edits record no undo (a
+and reopens it a few frames after it ends. Confirmed: three builds in a row
+in one editor session, no crash. Other safeguards: graph edits record no undo (a
 build is undone by rebuilding), the pose check reuses the editor's rig
 instance, and a build stops cleanly above 45 GiB (`BUILD_MEMORY_LIMIT_GIB`).
 

@@ -149,6 +149,7 @@ FAST_BUILD_SUSPEND_NOTIFICATIONS = True
 # Stop a build cleanly before the editor runs out of memory (private GiB of
 # the editor process): a stopped build can be rerun, a crash loses the session.
 BUILD_MEMORY_LIMIT_GIB = 45.0
+REOPEN_EDITOR_AFTER_FRAMES = 10
 
 
 def editor_memory_gib():
@@ -696,9 +697,7 @@ class RigBuilder:
         self._reopen_rig_editor_after = False
         try:
             subsystem = unreal.get_editor_subsystem(unreal.AssetEditorSubsystem)
-            if self.rig in (subsystem.get_all_edited_assets() or []):
-                subsystem.close_all_editors_for_asset(self.rig)
-                self._reopen_rig_editor_after = True
+            self._reopen_rig_editor_after = bool(subsystem.close_all_editors_for_asset(self.rig))
         except Exception as exc:
             self.warn(f"Could not close the Control Rig editor for the build: {exc}")
 
@@ -706,10 +705,21 @@ class RigBuilder:
         if not getattr(self, "_reopen_rig_editor_after", False):
             return
         self._reopen_rig_editor_after = False
-        try:
-            unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).open_editor_for_assets([self.rig])
-        except Exception as exc:
-            self.warn(f"Could not reopen the Control Rig editor: {exc}")
+        # A few frames later: the closed tab's widgets are destroyed on the
+        # editor's tick, which cannot run while this script holds it.
+        rig, state = self.rig, {"frames": 0, "handle": None}
+
+        def reopen(_delta):
+            state["frames"] += 1
+            if state["frames"] < REOPEN_EDITOR_AFTER_FRAMES:
+                return
+            unreal.unregister_slate_post_tick_callback(state["handle"])
+            try:
+                unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).open_editor_for_assets([rig])
+            except Exception as exc:
+                unreal.log_warning(f"[RigBuilder] Could not reopen the Control Rig editor: {exc}")
+
+        state["handle"] = unreal.register_slate_post_tick_callback(reopen)
 
     def _resume_graph_updates(self):
         """Undo _pause_graph_updates; True when something was restored."""
