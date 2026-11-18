@@ -684,11 +684,18 @@ class RigBuilder:
             pass
         if FAST_BUILD_SUSPEND_NOTIFICATIONS:
             self._close_rig_editor()
-            try:
-                rig.suspend_notifications(True)
-                self._paused["notifications"] = True
-            except Exception:
-                pass
+
+    def _suspend_notifications(self):
+        """Pause the blueprint's notifications for the new nodes. Only after the
+        previous build is cleared: nodes deleted while paused stay referenced by
+        the visual graph, and rebuilding it on resume crashed the editor."""
+        if not FAST_BUILD_SUSPEND_NOTIFICATIONS or self.rig is None:
+            return
+        try:
+            self.rig.suspend_notifications(True)
+            self._paused["notifications"] = True
+        except Exception:
+            pass
 
     def _close_rig_editor(self):
         """Close the rig's editor tab for the build (reopened afterwards).
@@ -853,6 +860,7 @@ class RigBuilder:
                 f"[RigBuilder] Cleared previous build: {removed_elements} element(s), "
                 f"{removed_nodes} graph node(s)."
             )
+            self._suspend_notifications()
             self.apply_maya_rest_pose(context)
             manifest = self.manifest or {}
             # Maya's world frame of every joint at rest (Unreal axes): the

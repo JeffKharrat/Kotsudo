@@ -41,6 +41,8 @@ from . import spline_ik_module
 
 CHORD_ITERATIONS = 3          # Newton steps of the chord walk per joint
 CHORD_STEP = 0.01             # U step of the secant slope
+TANGENT_STEP = 0.004          # U step of the spline's finite-difference tangent
+SPLINE_U_MARGIN = 1e-4        # KINDA_SMALL_NUMBER: Control Rig maps U onto [margin, 1 - margin]
 SPLINE_SAMPLES = 128           # Control Rig samples per spline segment (positions are linear between samples)
 
 
@@ -351,6 +353,8 @@ class JeffySplineModule(_JeffyBase):
         if any(n is None for n in ik_names):
             raise RuntimeError(f"IK controls not built: {spline.get('ik_controls')}")
         owners = [graph.get_control(n) for n in ik_names]
+        owners_rest = [self.context.hierarchy.get_global_transform(
+            graph_utils.make_key(unreal.RigElementType.CONTROL, n), True) for n in ik_names]
         # The columns' offsets are measured in each Maya control's own axes;
         # the Unreal control is built aligned to its anchor bone instead (the
         # V010 torso / neck IK controls rest turned -90 deg about X). Re-express
@@ -370,9 +374,8 @@ class JeffySplineModule(_JeffyBase):
                 points.append(graph.out(node))
         from_points = spline_ik_module._pick_spline_from_points_unit()
         position_unit = _spline_unit("Position", "Spline")
-        tangent_unit = _spline_unit("Tangent", "Spline")
         length_unit = spline_ik_module._pick_get_length_of_spline_unit()
-        if not (from_points and position_unit and tangent_unit and length_unit):
+        if not (from_points and position_unit and length_unit):
             raise RuntimeError("the Control Rig Spline nodes are not available (enable the ControlRigSpline plugin)")
         halves = [graph.rotate_vector(f"{owners[int(c['owner'])]}.Rotation",
                                       jeffy_math.q_rotate(to_ue[int(c["owner"])], h))
@@ -396,14 +399,23 @@ class JeffySplineModule(_JeffyBase):
         def position_at(u, spline_source=spline_pin):
             node = graph.node((position_unit.__name__,), "Pos")
             graph.feed(node, ["Spline"], spline_source)
-            graph.feed(node, ["U"], u)
+            # Undo the engine's margin, so U means the same as on Maya's curve.
+            span = 1.0 - 2.0 * SPLINE_U_MARGIN
+            graph.feed(node, ["U"], max(0.0, (u - SPLINE_U_MARGIN) / span) if isinstance(u, (int, float))
+                       else graph.div(graph.sub(u, SPLINE_U_MARGIN), span))
             return graph.pin(node, ["Position", "Result"])
 
-        def tangent_at(u):
-            node = graph.node((tangent_unit.__name__,), "Tan")
-            graph.feed(node, ["Spline"], spline_pin)
-            graph.feed(node, ["U"], u)
-            return graph.pin(node, ["Tangent", "Result"])
+        def tangent_at(u, side):
+            """Second-order finite difference. Control Rig's own tangent is the
+            segment between two samples, up to 0.2 deg off on a bent spine."""
+            step = TANGENT_STEP
+            if side == "start":
+                return graph.vsum([(position_at(u), -3.0), (position_at(graph.add(u, step)), 4.0),
+                                   (position_at(graph.add(u, 2.0 * step)), -1.0)])
+            if side == "end":
+                return graph.vsum([(position_at(u), 3.0), (position_at(graph.sub(u, step)), -4.0),
+                                   (position_at(graph.sub(u, 2.0 * step)), 1.0)])
+            return graph.vsub(position_at(graph.add(u, step)), position_at(graph.sub(u, step)))
 
         length_node = graph.node((length_unit.__name__,), "Len")
         graph.feed(length_node, ["Spline"], spline_pin)
@@ -412,7 +424,10 @@ class JeffySplineModule(_JeffyBase):
         # 4. Stretch factor and the chord walk (spline.py _length_chain).
         rig_scale = f"{owners[0]}.Scale3D.X"
         current = graph.div(length, rig_scale)
-        ratio = graph.div(current, float(spline.get("rest_length") or 1.0))
+        # Measured as the engine measures it, so the ratio is exactly 1 at rest
+        # (Maya's arc length differs slightly from the sampled polyline).
+        rest_length = self._sampled_rest_length(owners_rest, spline["columns"], to_ue)             or float(spline.get("rest_length") or 1.0)
+        ratio = graph.div(current, rest_length)
         stretch = spline.get("stretch")
         if stretch:
             factor = graph.lerp(1.0, ratio, graph.channel(stretch["control"], stretch["attr"], stretch.get("value", 1.0)))
@@ -436,7 +451,7 @@ class JeffySplineModule(_JeffyBase):
             bone = str(pin["joint"])
             if index == 0:
                 u = 0.0
-                position = previous
+                position = previous = points[0]     # the curve's exact start
             else:
                 target = graph.mul(step, bone_lengths[index - 1])
                 u = float(pin.get("u_rest") or 0.0)
@@ -448,8 +463,12 @@ class JeffySplineModule(_JeffyBase):
                         graph.greater(slope, 1e-9), slope, 1e-9)), CHORD_STEP)
                     u = graph.clamp(graph.sub(u, delta), 0.0, 1.0)
                 position = position_at(u)
-            tangent = tangent_at(u)
-            width = graph.vsub(position_at(u, edge_pin), position)
+            at_end = index == len(pins) - 1 and float(pin.get("u_rest") or 0.0) > 0.999
+            if at_end:      # the curve's exact end once the walk reaches it
+                position = graph.vlerp(position, points[-1], graph.select(
+                    graph.greater(u, 1.0 - 2.0 * SPLINE_U_MARGIN), 1.0, 0.0))
+            tangent = tangent_at(u, "start" if index == 0 else "end" if at_end else "middle")
+            width = graph.vsub(position_at(u, edge_pin), position_at(u))
             aim = graph.aim(graph.make_transform(position), list(frame["tangent_axis"]), tangent,
                             list(frame["width_axis"]), width, primary_is_direction=True)
             ik_pose = graph.make_absolute(self.joint_offset(bone, pin.get("pin_rest")), aim)
@@ -463,6 +482,8 @@ class JeffySplineModule(_JeffyBase):
                 final = graph.tlerp(fk_pins[bone], ik_pose, switch if switch is not None else 1.0)
             graph.set_transform("Bone", bone, final, propagate=True)
             previous = position
+        if chain_mode and switch is not None:
+            self._mode_visibility(graph, switch, spline, ik_names)
         if self.logger:
             self.logger.log(f"[JeffySpline] {self.name} ({spline.get('mode')}): {len(pins)} joint(s) on a "
                             f"{len(points)}-point spline, {len(controls)} control(s), chord walk x{CHORD_ITERATIONS}, "
@@ -472,6 +493,59 @@ class JeffySplineModule(_JeffyBase):
                                  attach_points={"root": self.chain[0], "tip": self.chain[-1],
                                                 "fk_tip_ctrl": controls[-1] if controls else None},
                                  outputs={"driven_bones": list(self.chain)}, recipe_data=recipe_data)
+
+    @staticmethod
+    def _sampled_rest_length(owners_rest, columns, to_ue):
+        """Length of the rest curve as Control Rig samples it (cubic clamped
+        B-spline, SPLINE_SAMPLES per segment, polyline through the samples)."""
+        points = []
+        for column in columns:
+            owner = int(column["owner"])
+            at = owners_rest[owner].transform_location(unreal.Vector(*jeffy_math.q_rotate(to_ue[owner], column["local"])))
+            points.append((at.x, at.y, at.z))
+        last = len(points) - 1
+        if last < 3:
+            return None
+        spans = last - 2
+        knots = [0.0] * 4 + [i / float(spans) for i in range(1, spans)] + [1.0] * 4
+
+        def basis(i, degree, u):
+            if degree == 0:
+                return 1.0 if knots[i] <= u < knots[i + 1] else 0.0
+            value = 0.0
+            if knots[i + degree] > knots[i]:
+                value += (u - knots[i]) / (knots[i + degree] - knots[i]) * basis(i, degree - 1, u)
+            if knots[i + degree + 1] > knots[i + 1]:
+                value += (knots[i + degree + 1] - u) / (knots[i + degree + 1] - knots[i + 1]) * basis(i + 1, degree - 1, u)
+            return value
+
+        count = last * SPLINE_SAMPLES
+        low, high = SPLINE_U_MARGIN, 1.0 - SPLINE_U_MARGIN
+        total, previous = 0.0, None
+        for index in range(count):
+            u = low + (high - low) * index / float(count - 1)
+            weights = [basis(i, 3, u) for i in range(last + 1)]
+            sample = [sum(w * p[axis] for w, p in zip(weights, points)) for axis in range(3)]
+            if previous is not None:
+                total += math.dist(previous, sample)
+            previous = sample
+        return total
+
+    def _mode_visibility(self, graph, switch, spline, ik_names):
+        """As Maya's two conditions: the FK controls show while ikFk < 1, the
+        IK controls while ikFk > 0 (both sets show during a blend)."""
+        if jeffy_math.unit("SetControlVisibility") is None:
+            self.context._warn(f"{self.name}: no Set Control Visibility node; the IK/FK controls stay visible.")
+            return
+        fk_names = [n for n in (self.ue_control(c) for c in spline.get("fk_controls") or []) if n]
+        for names, visible in ((fk_names, graph.less(switch, 1.0)), (ik_names, graph.greater(switch, 0.0))):
+            for control in names:
+                node = graph.node(("SetControlVisibility",), "Vis")
+                graph_utils.set_key_pin(graph.controller, graph.model, node, ["Item"], "Control", control)
+                graph.feed(node, ["bVisible", "Visible"], visible)
+                tail = self.context.get_exec_tail() or graph_utils.find_forwards_solve_node_name(graph.model)
+                graph_utils.connect_exec(graph.controller, graph.model, tail, node)
+                self.context.set_exec_tail(node)
 
     def _wave(self, graph, wave, nulls):
         """angle_i = sin(fraction_i / waveLength * 360 - time * waveSpeed + waveOffset)

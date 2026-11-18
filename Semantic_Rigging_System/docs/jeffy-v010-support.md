@@ -88,6 +88,33 @@ check attributes to the straight knee. Kotsudo's own Spline IK uses the same
 bake: V06 rebuilt with this code (2026-11-18) matches its last report on all
 21 modules, 298 poses and 10 blendshapes.
 
+### Accuracy pass (2026-11-18)
+
+27 of 31 modules are within T1 on all 634 poses (5 before this pass);
+calibration passes, blendshapes 4/4. V06 stays at 21/21.
+
+| Cause | Fix |
+|---|---|
+| Limbs used the skin joints' lengths; Maya solves a hidden IK chain 0.002 cm shorter, which moves a nearly straight elbow 0.4 cm | `limb.ik_upper` / `ik_lower` from the setup's `ik_joints` |
+| The FK chain rests 0.38 cm from the IK chain at the elbow | `limb.fk_middle_rest`, an FK-only offset on the middle bone |
+| Control Rig's spline tangent is one sampled segment (0.2° on a bent spine) | second-order finite difference on the curve |
+| Control Rig maps U onto [1e-4, 1 - 1e-4], so the curve misses its ends | U remapped, the end joints use the end points |
+| Maya's arc length differs from the sampled polyline, shifting joints when stretch is off | rest length measured as the engine samples it |
+
+The neck's IK and FK controls now hide as in Maya: FK shows while `ikFk` < 1,
+IK while `ikFk` > 0.
+
+**Left above T1:** the four ribbons, at most 0.47 cm and 0.12° (p95 under
+0.04 cm), at the elbow or knee on nearly straight poses. There the joint's
+offset from the limb's line goes with the square root of the slack (0.002 cm
+on the arms), so microns of reach change it by millimetres. This is close to
+the precision of Control Rig's 32-bit floats; it is the likely limit, not a
+measured one.
+
+**Re-import trap:** the rig description is stored on the skeleton. Re-importing
+an FBX onto an existing skeleton keeps the old description, so the builder
+silently uses stale data. Import so the skeleton's metadata is replaced.
+
 ### J3–J5 in Unreal, first run (2026-11-10)
 
 - Rest calibration OK: joints max 0.0019 cm, controls 0.0001 cm.

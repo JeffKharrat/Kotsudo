@@ -988,6 +988,25 @@ def _upstream_pin(plug, depth=0):
     return None
 
 
+def _fk_middle_rest(settings, joints):
+    """World (t, q) of the limb's middle joint in FK at rest: the FK chain does
+    not rest exactly where the IK chain does (0.38 cm on V010's arms)."""
+    import export_test_poses as etp
+
+    if not settings or len(joints) != 3 or not cmds.attributeQuery("ikFk", node=settings["node"], exists=True):
+        return None
+    plug = settings["node"] + ".ikFk"
+    value = cmds.getAttr(plug)
+    try:
+        cmds.setAttr(plug, 0.0)
+        position, rotation = etp.world_state(joints[1])
+    except Exception:
+        return None
+    finally:
+        cmds.setAttr(plug, value)
+    return {"t": position, "q": rotation}
+
+
 def _limb_params(setup, joints, index):
     """ikfk_limb: the controls by role and the IK goal attributes
     (ikfk_limb._ik_goal); the maths itself lives in the Unreal module."""
@@ -1001,15 +1020,23 @@ def _limb_params(setup, joints, index):
         return name if cmds.attributeQuery(name, node=ik_node, exists=True) else None
 
     points = [cmds.xform(j, query=True, worldSpace=True, translation=True) for j in joints]
+    # Maya solves the hidden IK chain, whose lengths differ slightly from the
+    # skin joints'; on a nearly straight limb that moves the elbow by 0.4 cm.
+    hidden = _messages(setup["tag"], "ik_joints")
+    solved = ([cmds.xform(j, query=True, worldSpace=True, translation=True) for j in hidden]
+              if len(hidden) == 3 else points)
     options = setup["options"]
     pole = by_key.get("pole")
     return {"limb": {
+        "fk_middle_rest": _fk_middle_rest(by_key.get("settings"), joints),
         "ik_control": ik["name"],
         "pole_control": pole["name"] if pole else None,
         "settings_control": by_key["settings"]["name"] if by_key.get("settings") else None,
         "fk_controls": [by_key[k]["name"] for k in ("fk0", "fk1", "fk2") if k in by_key],
         "upper": math.dist(points[0], points[1]),
         "lower": math.dist(points[1], points[2]),
+        "ik_upper": math.dist(solved[0], solved[1]),
+        "ik_lower": math.dist(solved[1], solved[2]),
         "soft": bool(options.get("soft")) and attr("softness") is not None,
         "stretch": bool(options.get("stretch")) and attr("stretch") is not None,
         "pin": bool(options.get("pin")) and pole is not None and attr("pin") is not None,

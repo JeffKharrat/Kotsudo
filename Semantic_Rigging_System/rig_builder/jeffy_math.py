@@ -158,6 +158,12 @@ class Graph:
         self.feed(node, ["B"], b)
         return self.out(node)
 
+    def less(self, a, b):
+        node = self.node(("MathFloatLess",), "Less")
+        self.feed(node, ["A"], a)
+        self.feed(node, ["B"], b)
+        return self.out(node)
+
     def select(self, condition, if_true, if_false):
         node = self.node(("MathFloatSelectBool",), "Select")
         self.feed(node, ["Condition"], condition)

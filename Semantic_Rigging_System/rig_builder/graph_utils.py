@@ -1983,19 +1983,11 @@ def clear_generated_rig(hierarchy, hierarchy_controller, graph_controller, model
 
     removed_nodes = 0
     if prefixes and model is not None:
-        for node in list(model.get_nodes() or []):
-            name = str(node.get_name())
-            if name.startswith(prefixes):
-                for method in ("remove_node_by_name", "remove_node"):
-                    fn = getattr(graph_controller, method, None)
-                    if fn is None:
-                        continue
-                    try:
-                        fn(name if method == "remove_node_by_name" else node, False)
-                        removed_nodes += 1
-                        break
-                    except Exception:
-                        continue
+        names = [str(node.get_name()) for node in list(model.get_nodes() or [])
+                 if str(node.get_name()).startswith(prefixes)]
+        # One bulk edit: the editor updates once instead of once per node.
+        if names and graph_controller.remove_nodes_by_name(names, False, False):
+            removed_nodes = len(names)
     return removed_elements, removed_nodes
 
 

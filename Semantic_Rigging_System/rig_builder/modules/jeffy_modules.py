@@ -158,11 +158,24 @@ class JeffyIKFKLimbModule(IKFKModule):
             graph.apply_rig_scale(str(self.chain[-1]).split("|")[-1])
         return result
 
+    def _fk_middle_offset(self, graph, limb, bone, solved):
+        """The solved bone moved to where Maya's FK chain rests."""
+        fk_rest = limb.get("fk_middle_rest") or {}
+        ik_rest = (getattr(self.context, "maya_rest_pose", None) or {}).get(bone) or {}
+        if not fk_rest.get("q") or not ik_rest.get("q"):
+            return solved
+        initial = jeffy_math.plain(self.context.hierarchy.get_global_transform(
+            graph_utils.make_key(unreal.RigElementType.BONE, bone), True))
+        turn = jeffy_math.q_mul([float(c) for c in fk_rest["q"]], jeffy_math.q_inverse([float(c) for c in ik_rest["q"]]))
+        target = (jeffy_math.q_mul(turn, initial[0]), [float(c) for c in fk_rest["t"]])
+        q, t = jeffy_math.compose(target, jeffy_math.inverse(initial))
+        return graph.make_absolute(jeffy_math.transform(q, t), solved)
+
     def _correct_middle_bone(self, graph):
-        """In IK, a constant offset on the middle joint, measured after the
-        compile (the builder's rest bake): Jeffy's bind pose keeps the joint
-        of a nearly straight limb slightly off the solved one (0.18 cm on
-        V010's arms). FK is left as it is."""
+        """A constant offset on the middle joint per mode. IK: measured after
+        the compile (the builder's rest bake), Jeffy's bind pose keeps the joint
+        of a nearly straight limb slightly off the solved one. FK: from Maya's
+        FK rest pose, the FK chain rests 0.38 cm from the IK one on V010's arms."""
         limb = self.read_recipe().get("Limb") or {}
         settings = limb.get("settings_control")
         if len(self.chain) != 3 or not settings:
@@ -170,7 +183,8 @@ class JeffyIKFKLimbModule(IKFKModule):
         bone = str(self.chain[1]).split("|")[-1]
         solved = graph.get_transform("Bone", bone)
         corrected = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), solved)
-        graph.set_transform("Bone", bone, graph.tlerp(solved, corrected, graph.channel(settings, "ikFk", 1.0)),
+        fk_pose = self._fk_middle_offset(graph, limb, bone, solved)
+        graph.set_transform("Bone", bone, graph.tlerp(fk_pose, corrected, graph.channel(settings, "ikFk", 1.0)),
                             propagate=False)
         registry = getattr(self.context, "rest_corrections", None)
         if registry is None:
@@ -227,8 +241,11 @@ class JeffyIKFKLimbModule(IKFKModule):
         start_p, end_p = f"{start}.Translation", f"{end}.Translation"
         scale = f"{start}.Scale3D.X"
         positions = [graph_utils.get_bone_global_position(hierarchy, b) for b in self.chain]
-        upper_rest = graph_utils.vector_length(graph_utils.vector_sub(positions[1], positions[0]))
-        lower_rest = graph_utils.vector_length(graph_utils.vector_sub(positions[2], positions[1]))
+        # The lengths of the chain Maya solves (the skin joints differ slightly).
+        upper_rest = float(limb.get("ik_upper") or graph_utils.vector_length(
+            graph_utils.vector_sub(positions[1], positions[0])))
+        lower_rest = float(limb.get("ik_lower") or graph_utils.vector_length(
+            graph_utils.vector_sub(positions[2], positions[1])))
 
         def channel(key, default):
             attribute = attributes.get(key)
