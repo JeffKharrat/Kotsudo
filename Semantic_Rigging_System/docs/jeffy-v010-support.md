@@ -85,7 +85,8 @@ The pose check's calibration now passes on V010: joints at rest are within
 Left above T1: motion error on poses, at most 1.3 cm on the arm ribbons and
 1.1 cm on the petal tips; one near-straight leg pose reaches 2.2 cm, which the
 check attributes to the straight knee. Kotsudo's own Spline IK uses the same
-bake and has not been rebuilt on V06 since this change.
+bake: V06 rebuilt with this code (2026-11-18) matches its last report on all
+21 modules, 298 poses and 10 blendshapes.
 
 ### J3–J5 in Unreal, first run (2026-11-10)
 
