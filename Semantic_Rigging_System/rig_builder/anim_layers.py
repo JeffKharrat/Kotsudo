@@ -356,6 +356,159 @@ def export_to_anim_sequence(sequence, binding, skeleton, mesh, name, folder=SEQU
     return anim
 
 
+# ---------------------------------------------------------------------------
+# Exact final export: Maya's bake + what the animator layer changes
+# ---------------------------------------------------------------------------
+
+# A bone whose edited and unedited tracks differ less than this on every
+# frame keeps the bake's own track, untouched.
+EDIT_TOLERANCE_CM = 1e-4
+EDIT_TOLERANCE_DEG = 1e-3
+
+
+def _local_tracks(anim, bones, count):
+    """{bone: [(t, q, s), ...]} local transforms per frame (t, s tuples, q xyzw)."""
+    options = unreal.AnimPoseEvaluationOptions()
+    local = unreal.AnimPoseSpaces.LOCAL
+    tracks = {bone: [] for bone in bones}
+    for index in range(count):
+        pose = unreal.AnimPoseExtensions.get_anim_pose_at_frame(anim, index, options)
+        for bone in bones:
+            transform = unreal.AnimPoseExtensions.get_bone_pose(pose, bone, local)
+            t, q, s = transform.translation, transform.rotation, transform.scale3d
+            tracks[bone].append(((t.x, t.y, t.z), (q.x, q.y, q.z, q.w), (s.x, s.y, s.z)))
+    return tracks
+
+
+def _q_norm(q):
+    n = math.sqrt(sum(c * c for c in q)) or 1.0
+    return tuple(c / n for c in q)
+
+
+def _curve_values(anim, name, count):
+    """Value of a float curve on each frame (keys at frame times), or None."""
+    try:
+        times, values = unreal.AnimationLibrary.get_float_keys(anim, name)
+    except Exception:
+        return None
+    if not times:
+        return None
+    by_frame = {}
+    length = unreal.AnimationLibrary.get_sequence_length(anim)
+    step = length / max(count - 1, 1)
+    for time, value in zip(times, values):
+        by_frame[int(round(time / step))] = value
+    out, last = [], values[0]
+    for index in range(count):
+        last = by_frame.get(index, last)
+        out.append(last)
+    return out
+
+
+def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE_FOLDER):
+    """The final Anim Sequence: Maya's baked clip plus, per bone and frame,
+    what the animator layer changes in the rig's playback.
+
+    The sequence is baked twice by Unreal (layers at their weights, then the
+    animator layers muted). Per bone, in its parent's space: translation
+    bake + (edited - unedited); rotation bake x (unedited^-1 x edited), i.e.
+    the edit turned in the bone's own frame; scale bake x edited / unedited.
+    A bone the layer doesn't change keeps the bake's own track, so untouched
+    frames and bones are exactly Maya's. Morph curves: bake + (edited - unedited).
+    Returns (anim, summary)."""
+    library = unreal.ControlRigSequencerLibrary
+    unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
+    layers = list(library.get_anim_layers() or [])[1:]
+    weights = [layer.get_weight() for layer in layers]
+    edited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Edited", folder, template=baked)
+    try:
+        for layer in layers:
+            layer.set_weight(0.0)
+        unedited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Unedited", folder,
+                                           template=baked)
+    finally:
+        for layer, weight in zip(layers, weights):
+            layer.set_weight(weight)
+
+    count = unreal.AnimationLibrary.get_num_keys(baked)
+    for anim, label in ((edited, "edited"), (unedited, "unedited")):
+        # Sequencer's bake also samples the exclusive end frame (one key
+        # more); both start at the clip's first frame, so key i = frame i.
+        if unreal.AnimationLibrary.get_num_keys(anim) < count:
+            raise RuntimeError(f"The {label} bake has {unreal.AnimationLibrary.get_num_keys(anim)} keys, "
+                               f"the Maya bake {count}: frame ranges differ.")
+    pose0 = unreal.AnimPoseExtensions.get_anim_pose_at_frame(baked, 0, unreal.AnimPoseEvaluationOptions())
+    bones = [str(b) for b in unreal.AnimPoseExtensions.get_bone_names(pose0)]
+    tracks_e = _local_tracks(edited, bones, count)
+    tracks_u = _local_tracks(unedited, bones, count)
+
+    changed = {}
+    for bone in bones:
+        worst_t = worst_r = 0.0
+        for (te, qe, se), (tu, qu, su) in zip(tracks_e[bone], tracks_u[bone]):
+            worst_t = max(worst_t, math.dist(te, tu))
+            worst_r = max(worst_r, anim_import._q_angle(qe, qu))
+        if worst_t > EDIT_TOLERANCE_CM or worst_r > EDIT_TOLERANCE_DEG:
+            changed[bone] = (worst_t, worst_r)
+
+    final_path = f"{folder}/{name}"
+    _delete_if_exists(final_path)
+    final = unreal.EditorAssetLibrary.duplicate_loaded_asset(baked, final_path)
+    if final is None:
+        raise RuntimeError(f"Could not make {final_path}.")
+    if changed:
+        tracks_b = _local_tracks(baked, list(changed), count)
+        controller = final.get_editor_property("controller")
+        controller.open_bracket(unreal.Text("Kotsudo exact export"), False)
+        try:
+            for bone in changed:
+                positions, rotations, scales = [], [], []
+                previous = None
+                for (tb, qb, sb), (te, qe, se), (tu, qu, su) in zip(tracks_b[bone], tracks_e[bone], tracks_u[bone]):
+                    q = _q_norm(anim_import._q_mul(qb, anim_import._q_mul(anim_import._q_inv(qu), qe)))
+                    if previous is not None and sum(a * b for a, b in zip(q, previous)) < 0.0:
+                        q = tuple(-c for c in q)  # same rotation, no flip between keys
+                    previous = q
+                    positions.append(unreal.Vector(*[tb[i] + te[i] - tu[i] for i in range(3)]))
+                    rotations.append(unreal.Quat(*q))
+                    scales.append(unreal.Vector(*[sb[i] * (se[i] / su[i] if abs(su[i]) > 1e-8 else 1.0)
+                                                  for i in range(3)]))
+                if not controller.set_bone_track_keys(bone, positions, rotations, scales, False):
+                    _warn(f"Could not write the track of {bone}.")
+        finally:
+            controller.close_bracket(False)
+
+    curves_changed = []
+    try:
+        curve_names = [str(c) for c in unreal.AnimationLibrary.get_animation_curve_names(
+            edited, unreal.RawCurveTrackTypes.RCT_FLOAT)]
+    except Exception:
+        curve_names = []
+    for curve in curve_names:
+        ve, vu, vb = (_curve_values(a, curve, count) for a in (edited, unedited, baked))
+        if not ve or not vu:
+            continue
+        if max(abs(a - b) for a, b in zip(ve, vu)) <= 1e-5:
+            continue
+        vb = vb or [0.0] * count
+        values = [vb[i] + ve[i] - vu[i] for i in range(count)]
+        length = unreal.AnimationLibrary.get_sequence_length(final)
+        times = [length * i / max(count - 1, 1) for i in range(count)]
+        if not unreal.AnimationLibrary.does_curve_exist(final, curve, unreal.RawCurveTrackTypes.RCT_FLOAT):
+            unreal.AnimationLibrary.add_curve(final, curve, unreal.RawCurveTrackTypes.RCT_FLOAT, False)
+        unreal.AnimationLibrary.add_float_curve_keys(final, curve, times, values)
+        curves_changed.append(curve)
+
+    for helper in (f"{name}_Edited", f"{name}_Unedited"):
+        _delete_if_exists(f"{folder}/{helper}")
+    unreal.EditorAssetLibrary.save_loaded_asset(final, False)
+    summary = {"bones_changed": {b: (round(t, 4), round(r, 4)) for b, (t, r) in changed.items()},
+               "curves_changed": curves_changed, "bones": len(bones), "frames": count}
+    _log(f"Exact export -> {final.get_path_name()}: {len(changed)} of {len(bones)} bone(s) and "
+         f"{len(curves_changed)} curve(s) changed by the animator layer; the rest is Maya's bake.")
+    return final, summary
+
+
 def build_layered_clip(rig_blueprint, rig_class, mesh, skeleton, document, manifest=None,
                        report_path=None, add_layer=True, check=True, baked_anim=None):
     """Everything for one clip. Returns {"sequence", "stats", "report"}.
