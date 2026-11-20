@@ -1,6 +1,13 @@
 # Animation export: assessment and plan
 
-Status (2026-11-02): **S0 built and tested** (Maya clip export, Animation
+**Status (2026-11-20): axis 1 built as a layered workflow:**
+each clip becomes a Level Sequence whose Control Rig track has a locked
+base layer (Maya's control values, per frame) and an additive animator
+layer. Checked on the five V010 clips; the transfer adds nothing beyond the
+rig's own error. It replaces the retake window (route F, phase 1a).
+Details and results: section 15.
+
+Earlier status (2026-11-02): **S0 built and tested** (Maya clip export, Animation
 tab, five script-made test clips). **S1 first Unreal run**: the `world`
 clip imported and checked, all 97 bones within T1 on all 49 frames (worst
 0.049 cm / 0.004°). Fixed since: the import also built a skeletal mesh,
@@ -470,7 +477,8 @@ Later, at least one clip made by an animator, not by a script.
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **1a** Retake window (F) | Control Rig section over a chosen range, per-frame keys (B) and float keys (C) in it, ease in/out | untouched window within T1; outside = baked; no visible edge jump |
+| **1a** ✅ Layered workflow (replaces the retake window F) | locked base layer of per-frame control keys (B) + additive animator layer; section 15 | five V010 clips: transfer error ≤ 0.004 cm over the rig's own; layer adds as expected (2026-11-20) |
+| **1a+** Exact final export | the baked clip + (rig with the layer − rig without it) | untouched frames equal the bake; an edit's effect equals the rig's |
 | **1b** Stock comparison | Unreal's additive FK Control Rig on the same clip and range | the same three numbers, side by side |
 
 **Axis 2: the animation as keys in the Control Rig**
@@ -519,7 +527,89 @@ rig will keep.
 3. **Sequence binding**: possessable actor in a test level (simple) or a
    spawnable (self-contained sequence).
 
-## 15. Link to the research question
+## 15. Layered workflow (built 2026-11-20)
+
+The professor's suggestion: keep the baked animation as a layer and animate
+on top of it. Unreal's own "Layered Control Rig" needs a Backwards Solve
+(control values from the bones), which our rigs lack: V010 refuses it. The
+sidecar removes the need, because Maya already says where every control is.
+
+`run_anim_layers.py` (module `rig_builder/anim_layers.py`), per clip:
+
+1. Imports the clip's baked FBX if missing (route A, `A_<rig>_<clip>`).
+2. Per frame (route B): sets every control to its Maya target with the pose
+   check's rule (`pose_harness._posed_control`), parents first, sets the
+   animation channels (raw Maya values, as the pose check), then repeats
+   set → solve until every control is within 0.01 cm of its target
+   (`MAX_SOLVE_PASSES` 12). V010 needs up to 5 passes: the eyelids sit in
+   follow spaces under the eyes, the head and the neck spline, and each pass
+   settles one level. With a fixed 3 passes the eyelids were 300 cm off.
+3. Reads each control's value (`get_euler_transform_from_control_value`)
+   and keeps the rotation continuous: each angle ± 360°, or the flipped form
+   (pitch → 180 − pitch, roll and yaw + 180), whichever is closest to the
+   previous frame.
+4. Makes `/Game/RigBuilder/Anims/LS_<rig>_<clip>` (rebuilt in place on a
+   rerun), bound to a level actor `<rig>_Anim` (a possessable: Unreal 5.6's
+   scripted spawnables are new-style bindings that `SequencerTools.export_anim_sequence`
+   never spawns, "No skel mesh found in Sequencer"). Adds a Control Rig
+   track and writes the base section's channels directly
+   (`Ctrl.Location/Rotation/Scale.X/Y/Z`; animation channels by element name,
+   `ikFk`, `ikFk_2`, ...). The V010 controls don't use a preferred rotation
+   order, so `Rotation.X/Y/Z` are roll, pitch, yaw. A channel that moves less
+   than 0.001 gets one key; the others one key per frame, linear.
+5. Opens the sequence, adds an additive "Animator" anim layer holding every
+   control (`add_anim_layer_from_selection`) and locks the base layer.
+6. Checks: bakes the sequence with Unreal's own evaluation
+   (`SequencerTools.export_anim_sequence`, onto a copy of the baked clip so
+   the frame rate is 24, a new Anim Sequence is 30 and refuses 24) and
+   compares every bone on every frame with the sidecar's Maya joints
+   (`anim_import.check_anim_sequence`). Report `<base>.<clip>.layers_check.json`.
+
+Results on the five V010 clips (rig rebuilt 2026-11-20):
+
+| Clip | Modules within T1 | Worst | Keys (animated channels) |
+|---|---|---|---|
+| fk_body | 29/31 | 0.415 cm, L arm ribbon | 7,026 (128) |
+| ikfk_switch | 28/31 | 0.384 cm, L elbow (`L_ArmLeaf2`) | 3,618 (57) |
+| spine | 29/31 | 0.467 cm, L arm ribbon | 5,250 (91) |
+| stress | 30/31 | 0.280 cm, L arm ribbon | 4,530 (76) |
+| world | 29/31 | 0.565 cm, R arm ribbon | 6,354 (114) |
+
+Measuring stick (baked clip): T0, 0.0014 cm. Sequencer's playback equals our
+own solve within 0.004 cm (checked on frame 24 of fk_body), so what remains
+is the rig's error. The arm ribbons are the modules the pose check puts at
+up to 0.47 cm. These clips were exported on 2026-11-10: their arm bend
+controls rest 0.19–0.38 cm from the current Maya rig (poses file of
+2026-11-19), which matches the first-frame ribbon offsets. Re-exporting
+them is the next measurement.
+
+Layer test (fk_body, frame 24): +10° on `C_HeadFK_CTL.Rotation.X` in the
+animator layer turns the `Head` bone 10.000° from the base; at layer weight
+0.5, 5.000°.
+
+**Found on the way: the Jeffy IK/FK blend.** Mid-switch (`ikfk_switch`,
+ikFk 0.5) the hand was 23 cm off. Maya's Jeffy limb blends each output
+joint with a `blendMatrix` of the FK control's world matrix and the IK
+joint's world matrix (position lerp, rotation slerp, per joint). The
+two-bone IK node's Weight slerps the bones' world rotations and rebuilds
+the positions along the chain, so the hand swings on an arc. The pose check
+only probes ikFk 0 and 1, so it couldn't see this. `JeffyIKFKLimbModule`
+now runs the solver and the end-bone rotation at weight 1 and blends each
+bone itself (`_blend_chains`): root and middle written without moving their
+children (so the later reads still see the IK pose), the end bone with them.
+Pose check unchanged (27/31, same four ribbons).
+
+Next:
+
+* **Exact final export.** Recording the rig gives the table above. Export
+  instead: baked clip + (rig with the layer − rig without it), per bone in
+  local space, so frames the animator didn't touch equal Maya's bake.
+* Re-export the five clips from the current Maya scene and re-measure.
+* Space switches and `ikFk` stay on the base layer (adding them is
+  meaningless); the layer holds only transform channels by use, not yet by
+  construction.
+
+## 16. Link to the research question
 
 "Is the transferred animation still the same animation?" splits the same way
 as the rig: by observer. Route A is perfect for the viewer and useless for

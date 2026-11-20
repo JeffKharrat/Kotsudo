@@ -259,7 +259,7 @@ section[id] { scroll-margin-top: 16px; }
   </ol>
   <h2>Next</h2>
   <ol>
-    <li><a href="#animation-export">Animation export (plan)</a></li>
+    <li><a href="#animation-export">Animation export</a></li>
   </ol>
 </nav>
 
@@ -2417,9 +2417,9 @@ section[id] { scroll-margin-top: 16px; }
 
 <!-- ============================================================ ANIMATION EXPORT (PLAN) -->
 <section class="feature" id="animation-export">
-  <h2>Animation export (plan)</h2>
-  <p class="lead">The next step: carry an animation from Maya to Unreal, not only the rig, so it plays the same and an animator can keep editing it in Sequencer.</p>
-  <div class="status"><span class="pill">Plan, 2026-11-02</span><span class="pill ok">Maya: clip export built, tested on 5 clips</span><span class="pill todo">Unreal: clip import written, not run yet</span></div>
+  <h2>Animation export</h2>
+  <p class="lead">Carry an animation from Maya to Unreal, not only the rig, so it plays the same and an animator can keep editing it in Sequencer.</p>
+  <div class="status"><span class="pill ok">Maya: clip export built, tested on 5 clips</span><span class="pill ok">Unreal: clip on the controls + animator layer, 5 V010 clips checked (2026-11-20)</span><span class="pill todo">Exact final export, key copy: next</span></div>
 
   <h3>What it is in Maya</h3>
   <div class="sol" style="border:0;padding-top:0">
@@ -2473,7 +2473,7 @@ section[id] { scroll-margin-top: 16px; }
   <h3>How we will solve it</h3>
   <div class="box-note">
     <b>Two axes, one shared start.</b> Steps 1 and 2 serve both.
-    <b>Axis 1</b> (step 3): the animation stays baked, and the animator fixes a few frames with the rig.
+    <b>Axis 1</b> (step 3, built): Maya's animation sits on the controls in a locked base layer, and the animator edits on a layer above it.
     <b>Axis 2</b> (steps 4 to 6): the whole animation arrives as keys on the Control Rig, so editing it in Unreal works like a retake in Maya.
     After the shared start, the two axes don't depend on each other.
   </div>
@@ -2514,7 +2514,7 @@ section[id] { scroll-margin-top: 16px; }
       <p>The pose check already proves that "these Maya control moves" give "these joints" in Unreal. An animation is one such pose per frame. For each frame, Unreal:</p>
       <ol>
         <li>applies each control's Maya motion (its world movement from rest, as the pose check does);</li>
-        <li>solves the rig, then re-applies twice, so controls under moving parents land right;</li>
+        <li>solves the rig, then re-applies and solves again until every control stays on its target, so controls under moving parents land right (on V010, up to 5 passes: the eyelids hang under the eyes, the head and the neck spline);</li>
         <li>reads each control's value and keys it at that frame.</li>
       </ol>
       <p>Working from world motion answers challenges 1 and 2: the control's orientation doesn't matter, and a moving <code>world_ctrl</code> is already inside each control's motion.</p>
@@ -2530,7 +2530,7 @@ section[id] { scroll-margin-top: 16px; }
           <rect class="bm" x="146" y="10" width="40" height="26" rx="4"/><text x="166" y="27" text-anchor="middle" class="s">f48</text>
         </g>
         <rect class="bu" x="214" y="4" width="92" height="38" rx="5"/><text x="260" y="20" text-anchor="middle" class="s">apply Maya</text><text x="260" y="34" text-anchor="middle" class="s">motion</text>
-        <rect class="bu" x="318" y="4" width="92" height="38" rx="5"/><text x="364" y="20" text-anchor="middle" class="s">solve,</text><text x="364" y="34" text-anchor="middle" class="s">re-apply ×2</text>
+        <rect class="bu" x="318" y="4" width="92" height="38" rx="5"/><text x="364" y="20" text-anchor="middle" class="s">solve, re-apply</text><text x="364" y="34" text-anchor="middle" class="s">until settled</text>
         <rect class="bu" x="422" y="4" width="98" height="38" rx="5"/><text x="471" y="20" text-anchor="middle" class="s">read value,</text><text x="471" y="34" text-anchor="middle" class="s">key frame f</text>
         <line class="ln" x1="188" y1="23" x2="211" y2="23" marker-end="url(#arr)"/>
         <line class="ln" x1="306" y1="23" x2="315" y2="23" marker-end="url(#arr)"/>
@@ -2557,39 +2557,33 @@ section[id] { scroll-margin-top: 16px; }
   <div class="sol">
     <div>
       <span class="num">STEP 3</span>
-      <h4>Axis 1: retakes on the baked clip</h4>
-      <p>Often the animator doesn't need the whole clip on controls, only a few frames to fix. So the first Unreal milestone is:</p>
+      <h4>Axis 1: a locked base layer, and a layer for the animator (built)</h4>
+      <p>The animator edits on top of the Maya animation without touching it:</p>
       <ul>
-        <li>the baked animation plays the whole clip, exactly;</li>
-        <li>the animator picks a frame range; only there does the Control Rig take over, keyed with step 2;</li>
-        <li>a few frames of blend at each edge hand over between the two.</li>
+        <li><b>Base layer, locked:</b> step 2's keys on every control. Unreal's controls play Maya's animation. A channel that never moves gets one key; the others get one per frame.</li>
+        <li><b>Animator layer, additive:</b> empty at first. A key there is added to the base: +10° on the head turns the head 10° more than Maya did, on top of whatever Maya did that frame. Its weight fades the whole edit (measured: 10.0° at weight 1, 5.0° at 0.5).</li>
+        <li><b>Edits stay smooth curves:</b> the animator's keys live on their own layer, so moving one bends a curve instead of making a one-frame spike in a per-frame bake.</li>
       </ul>
-      <p>The controls in the window start from <b>Maya's own pose</b>, read from the sidecar. Unreal's stock way of putting controls on an existing animation has to work this out backwards from the bones, which our rigs can't do. We don't have to: we already know where every Maya control was on every frame.</p>
-      <p>Because the rig matches Maya within T1 (0.1 cm), the hand-over at each edge has almost nothing to hide.</p>
-      <p>To compare: Unreal's own FK Control Rig can already be layered on a baked clip, but only joint by joint (no IK, spline or sliders).</p>
+      <p>Nothing is solved backwards. Unreal's built-in "Layered Control Rig" has to work out control values from the bones, which needs a backwards solve our rigs don't have (V010 refuses it). We skip that: the sidecar already says where every Maya control was on every frame.</p>
+      <p>Run it with <code>run_anim_layers.py</code>: one Level Sequence per clip (<code>LS_&lt;rig&gt;_&lt;clip&gt;</code>), about 6 seconds per 49-frame clip, then checked end to end.</p>
     </div>
     <figure>
-      <svg class="d" viewBox="0 0 520 210" role="img" aria-label="Timeline: the baked animation plays frames 1 to 120; a Control Rig layer covers frames 50 to 75 with blends from 44 and to 81; the result is baked, blend, edited window, blend, baked.">
-        <text x="0" y="34" class="h">Baked</text>
-        <rect class="bm" x="110" y="18" width="410" height="26" rx="4"/>
-        <text x="315" y="35" text-anchor="middle" class="s">exact, not editable</text>
-        <text x="0" y="84" class="h">Control Rig</text>
-        <polygon class="bu" points="258,96 280,68 366,68 388,96"/>
-        <text x="323" y="87" text-anchor="middle" class="s">you edit</text>
-        <text x="0" y="134" class="h">What plays</text>
-        <rect class="bm" x="110" y="118" width="148" height="26" rx="4"/>
-        <rect class="bx" x="258" y="118" width="22" height="26"/>
-        <rect class="bu" x="280" y="118" width="86" height="26"/>
-        <rect class="bx" x="366" y="118" width="22" height="26"/>
-        <rect class="bm" x="388" y="118" width="132" height="26" rx="4"/>
-        <text x="110" y="162" text-anchor="middle" class="s">1</text>
-        <text x="280" y="162" text-anchor="middle" class="s">50</text>
-        <text x="366" y="162" text-anchor="middle" class="s">75</text>
-        <text x="520" y="162" text-anchor="end" class="s">120</text>
-        <text x="269" y="186" text-anchor="middle" class="s">grey: blend frames</text>
-        <text x="323" y="204" text-anchor="middle" class="s">at frame 50, the controls start from Maya's own pose</text>
+      <svg class="d" viewBox="0 0 520 220" role="img" aria-label="Sequencer track stack: the base layer holds Maya's control values on every frame and is locked; the animator layer above it is additive with a weight; the Control Rig adds them and solves the bones.">
+        <text x="0" y="22" class="h">Sequencer, Control Rig track</text>
+        <rect class="bu" x="0" y="36" width="520" height="44" rx="5"/>
+        <text x="14" y="55" class="c">Animator layer</text>
+        <text x="14" y="71" class="s">additive, weight 0–1: only the changes</text>
+        <circle class="dot-u" cx="330" cy="58" r="5"/><circle class="dot-u" cx="420" cy="58" r="5"/>
+        <rect class="bm" x="0" y="92" width="520" height="44" rx="5"/>
+        <text x="14" y="111" class="c">Base layer (locked)</text>
+        <text x="14" y="127" class="s">Maya's control values, every frame</text>
+        <g class="dot-m"><circle cx="250" cy="114" r="2.5"/><circle cx="262" cy="114" r="2.5"/><circle cx="274" cy="114" r="2.5"/><circle cx="286" cy="114" r="2.5"/><circle cx="298" cy="114" r="2.5"/><circle cx="310" cy="114" r="2.5"/><circle cx="322" cy="114" r="2.5"/><circle cx="334" cy="114" r="2.5"/><circle cx="346" cy="114" r="2.5"/><circle cx="358" cy="114" r="2.5"/><circle cx="370" cy="114" r="2.5"/><circle cx="382" cy="114" r="2.5"/><circle cx="394" cy="114" r="2.5"/><circle cx="406" cy="114" r="2.5"/><circle cx="418" cy="114" r="2.5"/><circle cx="430" cy="114" r="2.5"/><circle cx="442" cy="114" r="2.5"/><circle cx="454" cy="114" r="2.5"/><circle cx="466" cy="114" r="2.5"/><circle cx="478" cy="114" r="2.5"/><circle cx="490" cy="114" r="2.5"/></g>
+        <line class="ln" x1="260" y1="138" x2="260" y2="158" marker-end="url(#arr)"/>
+        <rect class="bx" x="150" y="162" width="220" height="44" rx="5"/>
+        <text x="260" y="181" text-anchor="middle" class="c">Control Rig: base + layer</text>
+        <text x="260" y="197" text-anchor="middle" class="s">solves the bones live</text>
       </svg>
-      <figcaption>Outside the window the clip stays exact. Limit: a retake that moves the whole character (hips forward) doesn't carry into the frames after the window; the blend pulls back to the baked motion.</figcaption>
+      <figcaption>The Maya animation sits untouched in the locked base layer. Everything the animator changes is in the layer above it and can be faded or muted.</figcaption>
     </figure>
   </div>
 
@@ -2688,7 +2682,21 @@ section[id] { scroll-margin-top: 16px; }
         <li><b>Editability numbers:</b> keys per channel in Unreal against Maya, and which channels were copied or keyed per frame.</li>
         <li>The report shows the error on every frame, the worst frames with their worst joints, and the change since the last run.</li>
       </ul>
-      <p><b>Axis 1</b> adds three numbers: frames outside the window must equal the baked clip, an untouched window must stay within T1, and neither edge may add a visible jump.</p>
+      <p><b>Axis 1, measured (2026-11-20).</b> Unreal bakes each Level Sequence to an Anim Sequence with its own playback, and every bone on every frame is compared with Maya. The measuring stick (the baked FBX clip) is T0: 0.0014 cm.</p>
+      <div class="scroll">
+      <table class="t">
+        <thead><tr><th>V010 clip</th><th>Modules within T1</th><th>Worst bone</th></tr></thead>
+        <tbody>
+          <tr><td><code>fk_body</code></td><td>29 / 31</td><td>0.42 cm, arm ribbon</td></tr>
+          <tr><td><code>ikfk_switch</code></td><td>28 / 31</td><td>0.38 cm, elbow and arm ribbons</td></tr>
+          <tr><td><code>spine</code></td><td>29 / 31</td><td>0.47 cm, arm ribbon</td></tr>
+          <tr><td><code>stress</code> (360° spin)</td><td>30 / 31</td><td>0.28 cm, arm ribbon</td></tr>
+          <tr><td><code>world</code> (moving <code>world_ctrl</code>)</td><td>29 / 31</td><td>0.57 cm, arm ribbon</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>What is left is the rig's own accuracy, not the transfer: the arm ribbons are the modules the pose check already puts at up to 0.47 cm. Sequencer's playback matches our own solve within 0.004 cm.</p>
+      <p>The <code>ikfk_switch</code> clip found a rig difference the pose check couldn't: in the middle of an IK/FK switch the hand was 23 cm off. Maya blends each joint's world position and rotation separately (a <code>blendMatrix</code> per joint). Unreal's IK weight turned the rotations and rebuilt the positions along the chain, so the hand swung on an arc. The Jeffy limb now solves IK fully and then blends each bone as Maya does: 0.38 cm.</p>
       <p><b>Axis 2</b> adds two: copied channels must match Maya's curves, also between keys; and the edit test must stay within T1.</p>
       <p>Test clips: script-made Murakami clips (body FK, an IK/FK switch keyed mid-clip, the spine, an animated <code>world_ctrl</code>, a 360° spin). Space switches and sliders follow once they have run in Unreal (<a href="#unreal-todo">above</a>).</p>
     </div>
@@ -2702,7 +2710,7 @@ section[id] { scroll-margin-top: 16px; }
         <path class="lu" style="stroke-width:2" d="M50,166 L80,160 L110,150 L140,154 L170,132 L200,120 L230,138 L260,148 L290,126 L320,110 L350,128 L380,146 L410,140 L440,156 L470,160 L500,164"/>
         <text x="60" y="34" class="c">largest joint error per frame (cm)</text>
       </svg>
-      <figcaption>Illustration of the planned graph. No animation has been transferred yet, so these are not results.</figcaption>
+      <figcaption>Illustration of the report's graph shape, not measured data. Measured results are in the table.</figcaption>
     </figure>
   </div>
 
@@ -2711,7 +2719,10 @@ section[id] { scroll-margin-top: 16px; }
     <li><b>Carry the Maya controller's orientation on the controls?</b> It changes the rotate arrows animators see in Unreal and whether rotation keys can be copied exactly, not how the character moves. On Murakami, 19 of 49 controls already have their bone's axes, 21 have the same axes under other names (still copyable with a renaming rule), and only 9 really differ (leg IK and foot, three neck controls, the eyes). Decided later, at the key-copy step, by comparing both with the animation check.</li>
     <li><b>Which clips?</b> Script-made clips first. An animation made by an animator, if one exists for Murakami, would be the stronger test.</li>
     <li>Scale animation isn't planned. Unreal's "Bake to Control Rig" (any animation onto the controls) would need a backwards solve our rigs don't have, so it comes later.</li>
-    <li>Several Unreal steps (importing an animation-only FBX in 5.6, the names of animation channels in Sequencer) are known from the engine's headers but haven't run yet.</li>
+    <li><b>The final export isn't exact yet.</b> Recording the rig's playback gives the table above (up to 0.57 cm off on the arm ribbons). The plan: keep Maya's bake and add only what the animator layer changes (the rig with the layer minus the rig without it), so untouched frames stay identical to Maya.</li>
+    <li>The test clips were exported on 2026-11-10, before the last rig fixes in Maya: their arm bend controls rest 0.19–0.38 cm from where the current rig puts them. Re-exporting them should remove part of the remaining arm error.</li>
+    <li>The sequences use an actor placed in the level (<code>&lt;rig&gt;_Anim</code>): Unreal 5.6's scripted spawnables can't be baked to an Anim Sequence. Save the level to keep it.</li>
+    <li>Space switches and <code>ikFk</code> are keyed on the base layer only: added together on a layer, they don't mean anything.</li>
   </ul>
   <p class="muted">Full engineering plan: <code>docs/animation-export.md</code>.</p>
 </section>
@@ -2719,6 +2730,7 @@ section[id] { scroll-margin-top: 16px; }
 <footer>
   <p><b>Changelog</b></p>
   <ul>
+    <li>2026-11-20: animation on the Control Rig: each Maya clip becomes a locked base layer of control keys plus an additive animator layer (<code>run_anim_layers.py</code>). Five V010 clips checked frame by frame: the transfer adds nothing beyond the rig's own error (worst 0.57 cm, arm ribbons). The Jeffy limb's IK/FK blend now matches Maya mid-switch (was 23 cm off).</li>
     <li>2026-11-18: V010 in Unreal: all 31 modules build, rest pose within 0.006 cm of Maya, 27 of 31 modules within T1 on 634 poses (the four ribbons exceed it near a nearly straight elbow or knee, at most 0.47 cm). The neck's IK and FK controls hide by mode as in Maya. Builds take about 6 minutes.</li>
     <li>2026-11-12: V010 first full Unreal run read (torso spline pin name, Aim Math name fixed; wave frozen); the pre-export check recognises what the Jeffy modules rebuild.</li>
     <li>2026-11-10: added "Murakami V010: a matrix rig (Jeffy toolkit)": the reader, the IK goal, ribbons as weighted sums, the spline chord walk; J0–J5 built and Maya-checked, J1–J2 run in Unreal, the full Unreal pose check pending.</li>
