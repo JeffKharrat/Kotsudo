@@ -2419,7 +2419,7 @@ section[id] { scroll-margin-top: 16px; }
 <section class="feature" id="animation-export">
   <h2>Animation export</h2>
   <p class="lead">Carry an animation from Maya to Unreal, not only the rig, so it plays the same and an animator can keep editing it in Sequencer.</p>
-  <div class="status"><span class="pill ok">Maya: clip export built, tested on 5 clips</span><span class="pill ok">Unreal: clip on the controls + animator layer, 5 V010 clips checked (2026-11-20)</span><span class="pill todo">Exact final export, key copy: next</span></div>
+  <div class="status"><span class="pill ok">Maya: clip export built, tested on 5 clips</span><span class="pill ok">Unreal: clip on the controls + animator layer, 5 V010 clips checked (2026-11-20)</span><span class="pill ok">Exact final export: bake + the layer's changes</span><span class="pill todo">Key copy (axis 2): next</span></div>
 
   <h3>What it is in Maya</h3>
   <div class="sol" style="border:0;padding-top:0">
@@ -2566,6 +2566,7 @@ section[id] { scroll-margin-top: 16px; }
       </ul>
       <p>Nothing is solved backwards. Unreal's built-in "Layered Control Rig" has to work out control values from the bones, which needs a backwards solve our rigs don't have (V010 refuses it). We skip that: the sidecar already says where every Maya control was on every frame.</p>
       <p>Run it with <code>run_anim_layers.py</code>: one Level Sequence per clip (<code>LS_&lt;rig&gt;_&lt;clip&gt;</code>), about 6 seconds per 49-frame clip, then checked end to end.</p>
+      <p><b>The final export is exact</b> (<code>run_anim_export.py</code>). It doesn't record the rig, whose arm ribbons are up to 0.5 cm off Maya. It takes Maya's bake and adds only what the animator layer changes: Unreal plays the sequence once with the layer and once without, and the difference is added to each bone it touches. Measured: with an empty layer the result is the bake itself; with +10° on the head, only the head bone is rewritten, it turns exactly 10° from the bake, and every other bone stays Maya's.</p>
     </div>
     <figure>
       <svg class="d" viewBox="0 0 520 220" role="img" aria-label="Sequencer track stack: the base layer holds Maya's control values on every frame and is locked; the animator layer above it is additive with a weight; the Control Rig adds them and solves the bones.">
@@ -2719,7 +2720,6 @@ section[id] { scroll-margin-top: 16px; }
     <li><b>Carry the Maya controller's orientation on the controls?</b> It changes the rotate arrows animators see in Unreal and whether rotation keys can be copied exactly, not how the character moves. On Murakami, 19 of 49 controls already have their bone's axes, 21 have the same axes under other names (still copyable with a renaming rule), and only 9 really differ (leg IK and foot, three neck controls, the eyes). Decided later, at the key-copy step, by comparing both with the animation check.</li>
     <li><b>Which clips?</b> Script-made clips first. An animation made by an animator, if one exists for Murakami, would be the stronger test.</li>
     <li>Scale animation isn't planned. Unreal's "Bake to Control Rig" (any animation onto the controls) would need a backwards solve our rigs don't have, so it comes later.</li>
-    <li><b>The final export isn't exact yet.</b> Recording the rig's playback gives the table above (up to 0.57 cm off on the arm ribbons). The plan: keep Maya's bake and add only what the animator layer changes (the rig with the layer minus the rig without it), so untouched frames stay identical to Maya.</li>
     <li>The test clips were exported on 2026-11-10, before the last rig fixes in Maya: their arm bend controls rest 0.19–0.38 cm from where the current rig puts them. Re-exporting them should remove part of the remaining arm error.</li>
     <li>The sequences use an actor placed in the level (<code>&lt;rig&gt;_Anim</code>): Unreal 5.6's scripted spawnables can't be baked to an Anim Sequence. Save the level to keep it.</li>
     <li>Space switches and <code>ikFk</code> are keyed on the base layer only: added together on a layer, they don't mean anything.</li>
@@ -2730,7 +2730,7 @@ section[id] { scroll-margin-top: 16px; }
 <footer>
   <p><b>Changelog</b></p>
   <ul>
-    <li>2026-11-20: animation on the Control Rig: each Maya clip becomes a locked base layer of control keys plus an additive animator layer (<code>run_anim_layers.py</code>). Five V010 clips checked frame by frame: the transfer adds nothing beyond the rig's own error (worst 0.57 cm, arm ribbons). The Jeffy limb's IK/FK blend now matches Maya mid-switch (was 23 cm off).</li>
+    <li>2026-11-20: animation on the Control Rig: each Maya clip becomes a locked base layer of control keys plus an additive animator layer (<code>run_anim_layers.py</code>). Five V010 clips checked frame by frame: the transfer adds nothing beyond the rig's own error (worst 0.57 cm, arm ribbons). The Jeffy limb's IK/FK blend now matches Maya mid-switch (was 23 cm off). Same day: exact final export (<code>run_anim_export.py</code>): Maya's bake plus only what the animator layer changes; untouched bones stay Maya's.</li>
     <li>2026-11-18: V010 in Unreal: all 31 modules build, rest pose within 0.006 cm of Maya, 27 of 31 modules within T1 on 634 poses (the four ribbons exceed it near a nearly straight elbow or knee, at most 0.47 cm). The neck's IK and FK controls hide by mode as in Maya. Builds take about 6 minutes.</li>
     <li>2026-11-12: V010 first full Unreal run read (torso spline pin name, Aim Math name fixed; wave frozen); the pre-export check recognises what the Jeffy modules rebuild.</li>
     <li>2026-11-10: added "Murakami V010: a matrix rig (Jeffy toolkit)": the reader, the IK goal, ribbons as weighted sums, the spline chord walk; J0–J5 built and Maya-checked, J1–J2 run in Unreal, the full Unreal pose check pending.</li>

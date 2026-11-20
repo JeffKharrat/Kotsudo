@@ -478,7 +478,7 @@ Later, at least one clip made by an animator, not by a script.
 | Phase | Delivers | Done when |
 |---|---|---|
 | **1a** ✅ Layered workflow (replaces the retake window F) | locked base layer of per-frame control keys (B) + additive animator layer; section 15 | five V010 clips: transfer error ≤ 0.004 cm over the rig's own; layer adds as expected (2026-11-20) |
-| **1a+** Exact final export | the baked clip + (rig with the layer − rig without it) | untouched frames equal the bake; an edit's effect equals the rig's |
+| **1a+** ✅ Exact final export | the baked clip + (rig with the layer − rig without it), section 15 | empty layer = the bake (T0); a +10° head edit lands exactly, untouched bones equal the bake (2026-11-20) |
 | **1b** Stock comparison | Unreal's additive FK Control Rig on the same clip and range | the same three numbers, side by side |
 
 **Axis 2: the animation as keys in the Control Rig**
@@ -599,12 +599,39 @@ bone itself (`_blend_chains`): root and middle written without moving their
 children (so the later reads still see the IK pose), the end bone with them.
 Pose check unchanged (27/31, same four ribbons).
 
+**Exact final export (built 2026-11-20).** `run_anim_export.py`
+(`anim_layers.export_exact`) writes `A_<rig>_<clip>_Final`: Unreal bakes the
+sequence twice, with the animator layers at their weights (edited) and
+muted (unedited), and per bone, in its parent's space:
+
+* translation: bake + (edited − unedited);
+* rotation: bake × (unedited⁻¹ × edited), the edit turned in the bone's own
+  frame, sign kept continuous between keys;
+* scale: bake × edited / unedited;
+* morph curves: bake + (edited − unedited).
+
+A bone whose edited and unedited tracks differ by less than 0.0001 cm and
+0.001° on every frame keeps the baked clip's own track (`SetBoneTrackKeys`
+is called only for the others). Sequencer's bake has one key more than the
+Maya bake (it samples the exclusive end frame); key i is frame i in both.
+About 4.5 s per 49-frame clip.
+
+Tests (fk_body):
+
+| Animator layer | Bones rewritten | Result |
+|---|---|---|
+| empty | 0 of 117 | the bake itself: T0, 0.0013 cm (= measuring stick) |
+| +10° on `C_HeadFK_CTL.Rotation.X` | 1 (`Head`) | Head 10.000° from the bake on frames 0, 24, 48; within 0.001° / 0.004 cm of the rig's own playback with the edit; legs, chest, arm, root equal to the bake (3e-6) |
+
+So the rig's 0.1–0.5 cm error only reaches a bone the animator changed,
+and there only as the difference between two rig evaluations, where the
+rig's own error cancels except for how the edit itself moves through it.
+
 Next:
 
-* **Exact final export.** Recording the rig gives the table above. Export
-  instead: baked clip + (rig with the layer − rig without it), per bone in
-  local space, so frames the animator didn't touch equal Maya's bake.
 * Re-export the five clips from the current Maya scene and re-measure.
+* Larger edits through the limbs (an arm swung 45°): how far the ribbons'
+  rig error shows in the delta.
 * Space switches and `ikFk` stay on the base layer (adding them is
   meaningless); the layer holds only transform channels by use, not yet by
   construction.
