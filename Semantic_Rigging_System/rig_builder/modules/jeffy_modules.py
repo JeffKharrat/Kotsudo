@@ -153,7 +153,7 @@ class JeffyIKFKLimbModule(IKFKModule):
         # carries the rig scale (the hand / foot, and through it the toe that
         # follows it); the root, the middle and the ribbons stay at 1.
         graph = jeffy_math.Graph(self.context, f"{graph_utils.sanitize_name(self.name)}_RigScale")
-        self._correct_middle_bone(graph)
+        self._blend_chains(graph, result)
         if getattr(self.context, "rig_scale_control", None):
             graph.apply_rig_scale(str(self.chain[-1]).split("|")[-1])
         return result
@@ -171,25 +171,52 @@ class JeffyIKFKLimbModule(IKFKModule):
         q, t = jeffy_math.compose(target, jeffy_math.inverse(initial))
         return graph.make_absolute(jeffy_math.transform(q, t), solved)
 
-    def _correct_middle_bone(self, graph):
-        """A constant offset on the middle joint per mode. IK: measured after
-        the compile (the builder's rest bake), Jeffy's bind pose keeps the joint
-        of a nearly straight limb slightly off the solved one. FK: from Maya's
-        FK rest pose, the FK chain rests 0.38 cm from the IK one on V010's arms."""
+    def _blend_chains(self, graph, result):
+        """IK/FK blend as Maya's Jeffy limb does it: each output joint is a
+        blendMatrix of the FK control's world matrix and the IK joint's world
+        matrix, weighted by ikFk (position lerp, rotation slerp, per joint).
+
+        Unreal's two-bone IK weight instead slerps the bones' rotations and
+        rebuilds the positions along the chain, so mid-switch the hand swings
+        on an arc (23 cm off at ikFk 0.5 on V010's arms). So the solver (and
+        its end-bone rotation) run at full weight, and this blends afterwards.
+
+        The middle joint also takes a constant offset per mode. IK: measured
+        after the compile (the builder's rest bake), Jeffy's bind pose keeps the
+        joint of a nearly straight limb slightly off the solved one. FK: from
+        Maya's FK rest pose, the FK chain rests 0.38 cm from the IK one on
+        V010's arms."""
         limb = self.read_recipe().get("Limb") or {}
         settings = limb.get("settings_control")
-        if len(self.chain) != 3 or not settings:
+        fk_pins = list(getattr(self, "_fk_pose_pins", None) or [])
+        if len(self.chain) != 3 or not settings or len(fk_pins) != 3:
             return
-        bone = str(self.chain[1]).split("|")[-1]
-        solved = graph.get_transform("Bone", bone)
-        corrected = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), solved)
-        fk_pose = self._fk_middle_offset(graph, limb, bone, solved)
-        graph.set_transform("Bone", bone, graph.tlerp(fk_pose, corrected, graph.channel(settings, "ikFk", 1.0)),
-                            propagate=False)
+        controller, model = self.context.graph_controller, self.context.model
+        ik_node = (result.get("outputs") or {}).get("ik_node") if isinstance(result, dict) else None
+        ik_node = ik_node or f"{graph_utils.sanitize_name(self.name)}_IKSolve"
+        for pin in (f"{ik_node}.Weight", f"{self._ik_tip_node}.Weight" if getattr(self, "_ik_tip_node", None) else None):
+            if pin and graph_utils.pin_exists(model, pin):
+                try:
+                    controller.break_all_links(pin, True, False)
+                except Exception:
+                    pass
+                graph_utils.set_pin_default(controller, model, pin, "1.0")
+        ik_fk = graph.channel(settings, "ikFk", 1.0)
+        bones = [str(b).split("|")[-1] for b in self.chain]
+        # Read every IK pose before writing any bone: the root and middle are
+        # written without moving their children, so the later reads still see
+        # the IK pose; the end bone carries its children (hand, toes).
+        ik_poses = [graph.get_transform("Bone", bone) for bone in bones]
+        corrected = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), ik_poses[1])
+        fk_poses = list(fk_pins)
+        fk_poses[1] = self._fk_middle_offset(graph, limb, bones[1], fk_pins[1])
+        targets = [graph.tlerp(fk_poses[i], corrected if i == 1 else ik_poses[i], ik_fk) for i in range(3)]
+        for index, bone in enumerate(bones):
+            graph.set_transform("Bone", bone, targets[index], propagate=index == 2)
         registry = getattr(self.context, "rest_corrections", None)
         if registry is None:
             registry = self.context.rest_corrections = []
-        registry.append((bone, corrected.rsplit(".", 1)[0]))
+        registry.append((bones[1], corrected.rsplit(".", 1)[0]))
 
     def read_recipe(self):
         data = super().read_recipe()

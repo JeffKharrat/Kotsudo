@@ -174,6 +174,9 @@ class IKFKModule(RigModule):
                 fk_ctrl, driver_null,
             )
             fk_get_nodes.append(get_node)
+        # Each bone's FK pose (global), for subclasses that blend the chains
+        # themselves (Jeffy: per-joint world blend, as Maya's blendMatrix).
+        self._fk_pose_pins = [f"{node}.Transform" for node in fk_get_nodes]
 
         # ------------------------------------------------------------------
         # 2. IK controls and blend data nodes
@@ -343,6 +346,7 @@ class IKFKModule(RigModule):
             blend_var if switch_control is None else None,
             follow_control=follows_control,
         )
+        self._ik_tip_node = tip_node
         if tip_node:
             _chain_exec(controller, model, exec_tail, tip_node)
             exec_tail = tip_node
