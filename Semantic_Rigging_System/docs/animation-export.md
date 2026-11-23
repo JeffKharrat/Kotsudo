@@ -627,6 +627,27 @@ So the rig's 0.1–0.5 cm error only reaches a bone the animator changed,
 and there only as the difference between two rig evaluations, where the
 rig's own error cancels except for how the edit itself moves through it.
 
+**Fixes after the first user run (2026-11-23).**
+
+* Editor crash in `CloseLevelSequence` (shared pointer assert) when one call
+  built several clips: Sequencer was opened (layer) and closed (next clip)
+  with no editor frame between. Now Sequencer is closed at most once, at the
+  start, and the layers are added after the script returns, one sequence
+  every few frames (`add_layers_later`, a Slate post-tick callback with a
+  re-entry guard: opening a sequence ticks Slate inside the call). The log
+  says "Animator layer added to N sequence(s)" when done. The final export
+  mutes the layers by switching their sections off, so it never opens
+  Sequencer.
+* The crash also showed that the builder never saved the Control Rig: the
+  restart loaded the rig of 2026-11-17. `RigBuilder.run` now saves it after
+  a successful build (`SAVE_RIG_AFTER_BUILD`).
+* A clip of frames 0–20 from a scene whose timeline was 0–120 imported as
+  121 frames: the FBX time span is the playback range, not the bake range.
+  The Maya export now sets the playback range to the clip while writing the
+  FBX, and the Unreal import takes only the clip's frames (`FBXALIT_SET_RANGE`).
+  The user's own clip (FirstTestClip, 21 frames): bake T1 0.0004 cm; base
+  layer 0.008 cm; empty-layer final export = the bake.
+
 Next:
 
 * Re-export the five clips from the current Maya scene and re-measure.
