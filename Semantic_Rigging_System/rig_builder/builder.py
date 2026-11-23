@@ -150,6 +150,7 @@ FAST_BUILD_SUSPEND_NOTIFICATIONS = True
 # the editor process): a stopped build can be rerun, a crash loses the session.
 BUILD_MEMORY_LIMIT_GIB = 45.0
 REOPEN_EDITOR_AFTER_FRAMES = 10
+SAVE_RIG_AFTER_BUILD = True
 REST_BAKE_MAX_PASSES = 4
 REST_BAKE_TOLERANCE_CM = 0.001
 
@@ -660,17 +661,36 @@ class RigBuilder:
         except Exception:
             pass
         self._pause_graph_updates()
+        built = False
         try:
-            return self._run()
+            result = self._run()
+            built = True
+            return result
         finally:
             restored = self._resume_graph_updates()
             if restored and self.rig is not None:
                 self.compile_rig()
+            if built:
+                self._save_rig()
             self._reopen_rig_editor()
             memory = editor_memory_gib()
             self.logger.log(f"[RigBuilder] Build time: {time.time() - started:.1f} s"
                             + (f", editor memory {memory:.1f} GiB (peak {max(memory, getattr(self, '_peak_memory', 0.0)):.1f})."
                                if memory is not None else "."))
+
+    def _save_rig(self):
+        """Save the built Control Rig to disk. Unsaved, a build lived only in
+        memory: the editor crash of 2026-11-23 reloaded the 2026-11-17 rig and
+        lost every rebuild since (IK/FK blend fix included)."""
+        if not SAVE_RIG_AFTER_BUILD or self.rig is None:
+            return
+        try:
+            if unreal.EditorAssetLibrary.save_loaded_asset(self.rig, False):
+                self.logger.log(f"[RigBuilder] Saved {self.rig.get_path_name()}.")
+            else:
+                self.logger.log(f"[RigBuilder] Warning: could not save {self.rig.get_path_name()}; save it by hand.")
+        except Exception as exc:
+            self.logger.log(f"[RigBuilder] Warning: saving the rig failed ({exc}); save it by hand.")
 
     def _pause_graph_updates(self):
         self._paused = {}
