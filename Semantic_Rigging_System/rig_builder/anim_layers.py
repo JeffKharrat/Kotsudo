@@ -208,7 +208,10 @@ def create_sequence(name, mesh, rig_class, document, actor_label, folder=SEQUENC
     """A new Level Sequence bound to the level actor ``actor_label`` (showing
     ``mesh``) with a Control Rig track of ``rig_class``.
     Returns (sequence, binding, track)."""
-    unreal.LevelSequenceEditorBlueprintLibrary.close_level_sequence()
+    # No Sequencer calls here: opening and closing Sequencer within one Python
+    # call (no editor frame between) crashed the editor (2026-11-23,
+    # CloseLevelSequence -> invalid shared pointer). The caller closes it once
+    # before the first clip; layers are added on later frames (add_layers_later).
     path = f"{folder}/{name}"
     sequence = unreal.EditorAssetLibrary.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else None
     if isinstance(sequence, unreal.LevelSequence):
@@ -279,11 +282,83 @@ def write_base_keys(section, values, frames):
     return stats
 
 
+def close_sequencer_if_showing(paths):
+    """Close Sequencer when it shows one of ``paths`` (about to be rebuilt).
+    Call once, at the start of a run, never between opens."""
+    library = unreal.LevelSequenceEditorBlueprintLibrary
+    try:
+        current = library.get_current_level_sequence()
+    except Exception:
+        current = None
+    if current is not None and current.get_path_name().split(".")[0] in paths:
+        library.close_level_sequence()
+        return True
+    return False
+
+
+# Pending Sequencer work and the tick callback doing it (kept alive here).
+_LAYER_JOBS = {"queue": [], "handle": None, "wait": 0, "opened": None, "done": []}
+FRAMES_BETWEEN_SEQUENCER_STEPS = 5
+
+
+def add_layers_later(jobs):
+    """Add the animator layer to each (sequence, controls) on later editor
+    frames, one Sequencer step per few frames: open the sequence, let the
+    editor tick, then add the layer and lock the base. The last sequence stays
+    open. Returns immediately; the log says when it is done."""
+    state = _LAYER_JOBS
+    state["queue"].extend(jobs)
+    state["done"] = []
+    if state["handle"] is not None or not state["queue"]:
+        return
+
+    def tick(_delta):
+        # Opening a sequence ticks Slate inside the call, which re-enters this
+        # callback: without the guard the nested calls emptied the queue
+        # before any layer was added.
+        if state.get("busy"):
+            return
+        if state["wait"] > 0:
+            state["wait"] -= 1
+            return
+        state["busy"] = True
+        try:
+            if state["opened"] is None:
+                if not state["queue"]:
+                    unreal.unregister_slate_post_tick_callback(state["handle"])
+                    state["handle"] = None
+                    _log(f"Animator layer added to {len(state['done'])} sequence(s): "
+                         f"{', '.join(state['done'])}. Ready to animate.")
+                    return
+                sequence, controls = state["queue"].pop(0)
+                state["opened"] = (sequence, controls)
+                unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
+            else:
+                sequence, controls = state["opened"]
+                state["opened"] = None
+                proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
+                control_rig = proxies[0].control_rig if proxies else None
+                if control_rig is None:
+                    _warn(f"{sequence.get_name()}: no Control Rig on the track, animator layer not added.")
+                elif add_animator_layer(sequence, control_rig, controls) is not None:
+                    unreal.EditorAssetLibrary.save_loaded_asset(sequence, False)
+                    state["done"].append(sequence.get_name())
+        except Exception as exc:
+            _warn(f"Adding the animator layer failed: {exc}")
+            state["opened"] = None
+        finally:
+            state["busy"] = False
+        state["wait"] = FRAMES_BETWEEN_SEQUENCER_STEPS
+
+    state["wait"] = FRAMES_BETWEEN_SEQUENCER_STEPS
+    state["handle"] = unreal.register_slate_post_tick_callback(tick)
+
+
 def add_animator_layer(sequence, control_rig, controls, name=ANIMATOR_LAYER_NAME):
-    """Open the sequence, add an additive anim layer holding the animator
-    controls, lock the base layer. Returns the layer object or None."""
+    """Add an additive anim layer holding the animator controls and lock the
+    base layer, on the sequence open in Sequencer (add_layers_later opens it
+    on an earlier frame). Returns the layer object or None."""
     library = unreal.ControlRigSequencerLibrary
-    unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
     # A sequence rebuilt in place keeps the layer list of the previous run.
     for old_index in range(len(library.get_anim_layers() or []) - 1, 0, -1):
         try:
@@ -409,26 +484,30 @@ def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE
     """The final Anim Sequence: Maya's baked clip plus, per bone and frame,
     what the animator layer changes in the rig's playback.
 
-    The sequence is baked twice by Unreal (layers at their weights, then the
-    animator layers muted). Per bone, in its parent's space: translation
+    The sequence is baked twice by Unreal (layers as they are, then the
+    animator layers' sections switched off). Per bone, in its parent's space: translation
     bake + (edited - unedited); rotation bake x (unedited^-1 x edited), i.e.
     the edit turned in the bone's own frame; scale bake x edited / unedited.
     A bone the layer doesn't change keeps the bake's own track, so untouched
     frames and bones are exactly Maya's. Morph curves: bake + (edited - unedited).
     Returns (anim, summary)."""
-    library = unreal.ControlRigSequencerLibrary
-    unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
-    layers = list(library.get_anim_layers() or [])[1:]
-    weights = [layer.get_weight() for layer in layers]
+    # The animator layers are the Control Rig track's sections after the base
+    # one. They are muted by switching those sections off, which needs no
+    # Sequencer (opening it from a script loop crashed the editor).
+    proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
+    if not proxies:
+        raise RuntimeError(f"{sequence.get_name()} has no Control Rig track.")
+    layer_sections = list(proxies[0].track.get_sections())[1:]
+    active = [section.is_active() for section in layer_sections]
     edited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Edited", folder, template=baked)
     try:
-        for layer in layers:
-            layer.set_weight(0.0)
+        for section in layer_sections:
+            section.set_is_active(False)
         unedited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Unedited", folder,
                                            template=baked)
     finally:
-        for layer, weight in zip(layers, weights):
-            layer.set_weight(weight)
+        for section, was_active in zip(layer_sections, active):
+            section.set_is_active(was_active)
 
     count = unreal.AnimationLibrary.get_num_keys(baked)
     for anim, label in ((edited, "edited"), (unedited, "unedited")):
@@ -537,16 +616,9 @@ def build_layered_clip(rig_blueprint, rig_class, mesh, skeleton, document, manif
     if stats["not_found"]:
         _warn(f"{len(stats['not_found'])} channel(s) not on the track: {stats['not_found'][:8]}")
 
-    layer = None
-    if add_layer:
-        proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
-        control_rig = proxies[0].control_rig if proxies else None
-        if control_rig is None:
-            _warn("No Control Rig on the sequence's track: animator layer not added.")
-        else:
-            layer = add_animator_layer(sequence, control_rig, list(values["transforms"]))
-            if layer is not None:
-                _log(f"Animator layer added (additive, weight 1); base layer locked.")
+    # The animator layer needs the sequence open in Sequencer: the caller
+    # queues it (add_layers_later) so it happens on later editor frames.
+    layer_job = (sequence, list(values["transforms"])) if add_layer else None
     unreal.EditorAssetLibrary.save_loaded_asset(sequence, False)
 
     report = None
@@ -555,4 +627,4 @@ def build_layered_clip(rig_blueprint, rig_class, mesh, skeleton, document, manif
                                        template=baked_anim)
         report = anim_import.check_anim_sequence(anim, document, manifest, report_path,
                                                  label=f"{clip} on the Control Rig (base layer)")
-    return {"sequence": sequence, "stats": stats, "report": report, "layer": layer}
+    return {"sequence": sequence, "stats": stats, "report": report, "layer_job": layer_job}

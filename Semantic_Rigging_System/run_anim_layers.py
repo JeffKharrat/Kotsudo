@@ -79,7 +79,7 @@ def main():
     else:
         clip_paths = anim_import.find_all_clips([mesh, skeleton])
     skeleton_bones = set(builder.get_bone_names(skeleton))
-    results = []
+    clips = []
     for clip_path in clip_paths:
         document = anim_import.load_clip(clip_path)
         if CLIP_NAMES and document.get("clip") not in CLIP_NAMES:
@@ -88,6 +88,13 @@ def main():
         if len(joints - skeleton_bones) * 2 > len(joints):
             unreal.log_warning(f"[AnimLayers] {os.path.basename(clip_path)}: made for another skeleton, skipped.")
             continue
+        clips.append((clip_path, document))
+    # Sequencer is closed at most once, here, if it shows a sequence about to
+    # be rebuilt; it is never opened and closed again within this call.
+    anim_layers.close_sequencer_if_showing(
+        {f"{anim_layers.SEQUENCE_FOLDER}/LS_{d.get('rig_name') or 'rig'}_{d.get('clip')}" for _, d in clips})
+    results, layer_jobs = [], []
+    for clip_path, document in clips:
         # The baked clip (route A) next to it: the layer the final export
         # starts from, and the check's frame-rate template.
         baked = None
@@ -97,7 +104,9 @@ def main():
             asset_name = "A_" + fbx_name.replace(".anim.fbx", "").replace(".", "_")
             asset_path = f"{anim_layers.SEQUENCE_FOLDER}/{asset_name}"
             if REIMPORT_BAKED or not unreal.EditorAssetLibrary.does_asset_exist(asset_path):
-                baked = anim_import.import_baked_clip(fbx_path, skeleton, asset_name=asset_name)
+                baked = anim_import.import_baked_clip(
+                    fbx_path, skeleton, asset_name=asset_name,
+                    frame_range=(document["time"]["start"], document["time"]["end"]))
             else:
                 baked = unreal.EditorAssetLibrary.load_asset(asset_path)
         else:
@@ -108,8 +117,15 @@ def main():
                                                 baked_anim=baked)
         if result["report"]:
             results.append(result["report"]["verdict"])
+        if result.get("layer_job"):
+            layer_jobs.append(result["layer_job"])
     for verdict in results:
         unreal.log(f"[AnimLayers] {verdict}")
+    if layer_jobs:
+        # After this script returns, one sequence every few editor frames.
+        unreal.log(f"[AnimLayers] Adding the animator layer to {len(layer_jobs)} sequence(s) over the next "
+                   "frames; wait for the 'Animator layer added' line before animating.")
+        anim_layers.add_layers_later(layer_jobs)
 
 
 if __name__ == "__main__":
