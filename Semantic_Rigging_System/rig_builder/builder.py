@@ -22,8 +22,8 @@ from .metadata_reader import (
 from .modules.fk_module import FKModule
 from .modules.ik_module import IKModule
 from .modules.ikfk_module import IKFKModule
-from .modules.jeffy_modules import JeffyFKChainModule, JeffyIKFKLimbModule, JeffyRigBaseModule
-from .modules.jeffy_ribbon import JeffyRibbonModule, JeffySplineModule
+from .modules.setup_modules import SetupFKChainModule, SetupIKFKLimbModule, SetupRigBaseModule
+from .modules.setup_ribbon import SetupRibbonModule, SetupSplineModule
 from .modules.rig_module import RigModule
 from .modules.spline_ik_module import SplineIKModule
 
@@ -49,12 +49,12 @@ MODULE_REGISTRY = {
     "IKLimb": IKModule,
     "IKFKSwitch": IKFKModule,
     "SplineIK": SplineIKModule,
-    # Rigs built with the Jeffy toolkit (docs/jeffy-v010-support.md).
-    "Jeffy.rig_base": JeffyRigBaseModule,
-    "Jeffy.fk_chain": JeffyFKChainModule,
-    "Jeffy.ikfk_limb": JeffyIKFKLimbModule,
-    "Jeffy.ribbon": JeffyRibbonModule,
-    "Jeffy.spline": JeffySplineModule,
+    # Setup rigs (docs/setup-rig-v010-support.md).
+    "Setup.rig_base": SetupRigBaseModule,
+    "Setup.fk_chain": SetupFKChainModule,
+    "Setup.ikfk_limb": SetupIKFKLimbModule,
+    "Setup.ribbon": SetupRibbonModule,
+    "Setup.spline": SetupSplineModule,
 }
 
 
@@ -182,15 +182,15 @@ def editor_memory_gib():
     return None
 
 MODULE_BUILD_ORDER = {
-    "Jeffy.rig_base": -1,      # its controls are space targets of everything else
+    "Setup.rig_base": -1,      # its controls are space targets of everything else
     "FKChain": 0,
-    "Jeffy.fk_chain": 0,
+    "Setup.fk_chain": 0,
     "IKLimb": 1,
     "IKFKSwitch": 2,
-    "Jeffy.ikfk_limb": 2,
+    "Setup.ikfk_limb": 2,
     "SplineIK": 3,
-    "Jeffy.spline": 3,
-    "Jeffy.ribbon": 4,          # reads the limb's solved bones
+    "Setup.spline": 3,
+    "Setup.ribbon": 4,          # reads the limb's solved bones
 }
 
 
@@ -811,16 +811,16 @@ class RigBuilder:
             self.logger.log(
                 "[RigBuilder] Loaded {} module(s) from embedded manifest.".format(len(detected_modules))
             )
-            # Rigs built with the Jeffy toolkit: their setups are listed in the
-            # manifest, rebuilt here type by type (docs/jeffy-v010-support.md).
+            # Setup rigs: their setups are listed in the
+            # manifest, rebuilt here type by type (docs/setup-rig-v010-support.md).
             pending = {}
             for m in manifest_modules:
                 module_type = str(m.get("module_type") or "")
-                if module_type.startswith("Jeffy.") and module_type not in self.module_registry:
+                if module_type.startswith("Setup.") and module_type not in self.module_registry:
                     pending[module_type] = pending.get(module_type, 0) + 1
             if pending:
-                self.warn("Jeffy setups not rebuilt yet (skipped): " + ", ".join(
-                    f"{count} {module_type[len('Jeffy.'):]}" for module_type, count in sorted(pending.items())))
+                self.warn("setups not rebuilt yet (skipped): " + ", ".join(
+                    f"{count} {module_type[len('Setup.'):]}" for module_type, count in sorted(pending.items())))
 
         # Fallback: detect modules from per-bone ModuleType/ModuleName/Role attributes.
         if not detected_modules:

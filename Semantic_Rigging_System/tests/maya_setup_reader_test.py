@@ -1,17 +1,17 @@
-"""Jeffy rig reader (J0), checked on Murakami V010 (run with mayapy on a scene copy).
+"""Setup rig reader (J0), checked on Murakami V010 (run with mayapy on a scene copy).
 
-    "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe" tests/maya_jeffy_reader_test.py <V010_copy.ma> [out_dir]
+    "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe" tests/maya_setup_reader_test.py <V010_copy.ma> [out_dir]
 
-Checks, on a rig built with the Jeffy toolkit (docs/jeffy-v010-support.md):
+Checks, on a setup rig (docs/setup-rig-v010-support.md):
 
-  * every Jeffy setup is read (types, controls, outputs), and the skeleton
+  * every setup is read (types, controls, outputs), and the skeleton
     root is the one the rig_base setup declares (``Root``);
   * every skinned joint belongs to exactly one module;
   * the tool lists the setups as modules (orange: not rebuilt in Unreal yet);
   * a full Kotsudo export works: FBX verified (the meshes named like joints
-    are renamed for the export), manifest valid, with a ``jeffy`` section
+    are renamed for the export), manifest valid, with a ``setup_rig`` section
     whose control records the pose check finds; test poses written;
-  * an animation clip on Jeffy controls exports, and its samples equal a
+  * an animation clip on setup controls exports, and its samples equal a
     fresh capture.
 
 The scene is never saved.
@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 import export_animation as ea  # noqa: E402
 import export_rig_manifest as erm  # noqa: E402
 import export_test_poses as etp  # noqa: E402
-import jeffy_reader  # noqa: E402
+import setup_reader  # noqa: E402
 import rig_tagger_tool  # noqa: E402
 
 FAILURES = []
@@ -89,7 +89,7 @@ def check_j2(setups, manifest):
     from rig_builder import manifest_schema
 
     print("\n-- J2 records --")
-    described = [s for s in setups if s["type"] in jeffy_reader.DESCRIBED_TYPES]
+    described = [s for s in setups if s["type"] in setup_reader.DESCRIBED_TYPES]
     records = {r["name"]: r for rs in (manifest.get("bone_controllers") or {}).values() for r in rs}
     expected = sum(len(s["controls"]) for s in described)
     print("records: {} (expected {})".format(len(records), expected))
@@ -296,7 +296,7 @@ def check_j3(setups, manifest):
     records = {r["name"]: r for rs in (manifest.get("bone_controllers") or {}).values() for r in rs}
     worst = 0.0
     for setup in (s for s in setups if s["type"] == "ikfk_limb"):
-        module = modules[jeffy_reader.module_name(setup)]
+        module = modules[setup_reader.module_name(setup)]
         limb = module["params"].get("limb") or {}
         switch = module["params"].get("switch") or {}
         check(switch.get("attribute_info", {}).get("name") == "ikFk", "{}: switch attribute_info".format(module["module_name"]))
@@ -324,8 +324,8 @@ def check_j3(setups, manifest):
                  {"pin": 1.0}, {"stretch": 0.5, "pin": 0.5, "softness": 0.3}, {"twist": 25.0}]
         rest_upper = math.dist(cmds.xform(joints[0], q=True, ws=True, t=True), cmds.xform(joints[1], q=True, ws=True, t=True))
         rest_lower = math.dist(cmds.xform(joints[1], q=True, ws=True, t=True), cmds.xform(joints[2], q=True, ws=True, t=True))
-        end_ref = (jeffy_reader._messages(setup["tag"], "ik_end_ref") or [None])[0]
-        ik_joints = jeffy_reader._messages(setup["tag"], "ik_joints")
+        end_ref = (setup_reader._messages(setup["tag"], "ik_end_ref") or [None])[0]
+        ik_joints = setup_reader._messages(setup["tag"], "ik_joints")
         # pull the IK control so the limb is nearly straight (soft zone active)
         cmds.setAttr(ik + ".translateY", cmds.getAttr(ik + ".translateY") + 90)
         for case in cases:
@@ -356,7 +356,7 @@ def check_j3(setups, manifest):
             finals = [finals[0] + ((start - pole_p).length() - finals[0]) * pin,
                       finals[1] + ((pole_p - end).length() - finals[1]) * pin]
             # The hidden IK chain carries the formula exactly; the bind joints
-            # follow it with a constant offset Jeffy baked at build time (0.4
+            # follow it with a constant offset the toolkit baked at build time (0.4
             # cm on the nearly straight arm), which the pose check treats as
             # "explained by the limb being near straight".
             actual_end = om.MVector(*cmds.xform(joints[2], q=True, ws=True, t=True))
@@ -397,10 +397,10 @@ def check_j4(setups, manifest):
     poses = [{}, {"L_ArmLeaf1FK_CTL.rotateZ": 35, "L_ArmLeaf2FK_CTL.rotateX": -40, "L_ArmLeaf1Bend_CTL.translateZ": 20,
                   "L_ArmLeaf2Bend_CTL.rotateY": 30, "L_LegLeaf2FK_CTL.rotateZ": 50, "L_LegLeaf1Bend_CTL.rotateX": 25}]
     for setup in (s for s in setups if s["type"] == "ribbon"):
-        module = modules[jeffy_reader.module_name(setup)]
+        module = modules[setup_reader.module_name(setup)]
         ribbon = module["params"].get("ribbon") or {}
         if not check(ribbon.get("segments"), "{}: no ribbon params ({})".format(
-                module["module_name"], module["params"].get("jeffy", {}).get("describe_error"))):
+                module["module_name"], module["params"].get("setup_rig", {}).get("describe_error"))):
             continue
         check(len(ribbon["segments"]) == 2 and all(len(s["pins"]) == 5 for s in ribbon["segments"]),
               "{}: segments/pins".format(module["module_name"]))
@@ -411,7 +411,7 @@ def check_j4(setups, manifest):
         for plug, value in pose.items():
             cmds.setAttr(plug, cmds.getAttr(plug) + value)
         for setup in (s for s in setups if s["type"] == "ribbon"):
-            ribbon = modules[jeffy_reader.module_name(setup)]["params"].get("ribbon") or {}
+            ribbon = modules[setup_reader.module_name(setup)]["params"].get("ribbon") or {}
             for entry in ribbon.get("controls", {}).values():
                 predicted = _eval_expr(entry["expr"])
                 actual = _m(entry["group"])
@@ -448,7 +448,7 @@ def _pose_matrix(pose):
 
 
 def _bspline_point(knots, degree, t, points):
-    weights = jeffy_reader.bspline_basis(knots, degree, t)
+    weights = setup_reader.bspline_basis(knots, degree, t)
     result = om.MVector()
     for w, p in zip(weights, points):
         result += p * w
@@ -465,7 +465,7 @@ def check_j5(setups, manifest):
     knots = [0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 4.0]
     rest_joint = {}
     for module in modules.values():
-        if module["module_type"] == "Jeffy.spline":
+        if module["module_type"] == "Setup.spline":
             for joint in module["chain"]:
                 rest_joint[joint.split("|")[-1]] = _m(joint)                 # the scene is at rest here
     for stretch_value in (1.0, 0.0):
@@ -473,10 +473,10 @@ def check_j5(setups, manifest):
             for plug, value in pose.items():
                 cmds.setAttr(plug, cmds.getAttr(plug) + value)
             for setup in (s for s in setups if s["type"] == "spline"):
-                module = modules[jeffy_reader.module_name(setup)]
-                spline = module["params"].get("jeffy_spline") or {}
+                module = modules[setup_reader.module_name(setup)]
+                spline = module["params"].get("setup_spline") or {}
                 if not check(spline.get("pins"), "{}: no spline params ({})".format(
-                        module["module_name"], module["params"].get("jeffy", {}).get("describe_error"))):
+                        module["module_name"], module["params"].get("setup_rig", {}).get("describe_error"))):
                     continue
                 if spline.get("stretch"):
                     cmds.setAttr("{}.{}".format(spline["stretch"]["control"], spline["stretch"]["attr"]), stretch_value)
@@ -520,14 +520,14 @@ def check_j5(setups, manifest):
                                     high = mid
                             u = (low + high) / 2
                     position = _bspline_point(knots, 3, 4.0 * u, centers)
-                    d_weights = jeffy_reader.bspline_basis(knots, 3, 4.0 * u, derivative=True)
+                    d_weights = setup_reader.bspline_basis(knots, 3, 4.0 * u, derivative=True)
                     tangent = om.MVector()
                     for w, c in zip(d_weights, centers):
                         tangent += c * w
                     # the strip's width direction at the SAME u: a second curve
                     # through the edge CVs (centre + half) minus the middle one
                     width = om.MVector()
-                    for w, h in zip(jeffy_reader.bspline_basis(knots, 3, 4.0 * u), halves):
+                    for w, h in zip(setup_reader.bspline_basis(knots, 3, 4.0 * u), halves):
                         width += h * w
                     tangent = tangent.normal()
                     width = (width - tangent * (width * tangent)).normal()
@@ -561,23 +561,23 @@ def check_j5(setups, manifest):
 
 def main():
     scene = sys.argv[1]
-    out_dir = sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="kotsudo_jeffy_")
+    out_dir = sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="kotsudo_setup_")
     cmds.file(scene, open=True, force=True, ignoreVersion=True)
 
     # -- reader ---------------------------------------------------------------
-    setups = jeffy_reader.read_setups()
-    summary = jeffy_reader.summary(setups)
+    setups = setup_reader.read_setups()
+    summary = setup_reader.summary(setups)
     print("setups:", summary)
     check(summary["by_type"] == EXPECTED_TYPES, "setup types {}".format(summary["by_type"]))
     root = erm.root_joint()
     print("root joint:", root)
     check(root and root.split("|")[-1] == "Root", "root joint {}".format(root))
     unknown = [s["tag"] for s in setups if not s["known_version"]]
-    check(not unknown, "unknown Jeffy versions: {}".format(unknown))
+    check(not unknown, "unknown setup versions: {}".format(unknown))
     no_controls = [s["tag"] for s in setups if s["type"] != "wire_attribute" and not s["controls"]]
     check(not no_controls, "setups without controls: {}".format(no_controls))
 
-    modules = jeffy_reader.modules_config(setups)
+    modules = setup_reader.modules_config(setups)
     print("modules:", len(modules), collections.Counter(m["module_type"] for m in modules))
     owners = collections.defaultdict(list)
     for module in modules:
@@ -605,27 +605,27 @@ def main():
     statuses = collections.Counter(rig_tagger_tool.validate_module(m, graph)[0] for m in tool_modules)
     print("tool statuses:", dict(statuses))
     supported = sum(1 for m in tool_modules
-                    if m["module_type"][len(jeffy_reader.MODULE_PREFIX):] in jeffy_reader.UNREAL_SUPPORTED_TYPES)
+                    if m["module_type"][len(setup_reader.MODULE_PREFIX):] in setup_reader.UNREAL_SUPPORTED_TYPES)
     check(statuses.get("green", 0) == supported and statuses.get("orange", 0) == len(tool_modules) - supported,
           "tool statuses {} ({} supported)".format(dict(statuses), supported))
-    described = [m for m in tool_modules if m["module_type"] in ("Jeffy.ikfk_limb", "Jeffy.ribbon", "Jeffy.spline")]
+    described = [m for m in tool_modules if m["module_type"] in ("Setup.ikfk_limb", "Setup.ribbon", "Setup.spline")]
     missing = [m["module_name"] for m in described
-               if not any(k in m["params"] for k in ("limb", "ribbon", "jeffy_spline"))]
+               if not any(k in m["params"] for k in ("limb", "ribbon", "setup_spline"))]
     check(not missing, "setups without an Unreal description: {} ({})".format(
-        missing, [m["params"].get("jeffy", {}).get("describe_error") for m in described
+        missing, [m["params"].get("setup_rig", {}).get("describe_error") for m in described
                   if m["module_name"] in missing]))
 
     # -- full export ---------------------------------------------------------------
     cmds.loadPlugin("fbxmaya", quiet=True)
     fbx = erm.export(out_dir, "v010", "murakami", tool_modules)
     manifest = json.loads(cmds.getAttr(erm.manifest_plug()))
-    jeffy = manifest.get("jeffy") or {}
-    records = [c for s in jeffy.get("setups") or [] for c in s.get("controls") or []]
+    setup = manifest.get("setup_rig") or {}
+    records = [c for s in setup.get("setups") or [] for c in s.get("controls") or []]
     with_shape = sum(1 for c in records if c.get("shape_id"))
-    print("manifest: {} modules, jeffy setups {}, control records {} ({} with a shape), notes {}".format(
-        len(manifest["modules"]), len(jeffy.get("setups") or []), len(records), with_shape, jeffy.get("notes")))
-    check(len(jeffy.get("setups") or []) == summary["setups"], "jeffy setups in manifest")
-    check(manifest.get("source", {}).get("rig_tool") == "jeffy", "source.rig_tool")
+    print("manifest: {} modules, setups {}, control records {} ({} with a shape), notes {}".format(
+        len(manifest["modules"]), len(setup.get("setups") or []), len(records), with_shape, setup.get("notes")))
+    check(len(setup.get("setups") or []) == summary["setups"], "setups in manifest")
+    check(manifest.get("source", {}).get("rig_tool") == "setup_rig", "source.rig_tool")
     found = etp.manifest_controls(manifest)
     print("animator controls the pose check finds:", len(found))
     check(len(found) >= summary["controls"] - 4, "pose check finds {} of {} controls".format(
@@ -640,7 +640,7 @@ def main():
     check_j4(setups, manifest)
     check_j5(setups, manifest)
 
-    # -- an animation clip on Jeffy controls -----------------------------------------------
+    # -- an animation clip on setup controls -----------------------------------------------
     rng = random.Random(5)
     keyed = 0
     for name in sorted(found)[:12]:

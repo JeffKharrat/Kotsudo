@@ -5,7 +5,7 @@
 Writes, in <out_dir>: <base_name>.fbx (skeleton, meshes, manifest on the root
 joint), its control shapes and test poses, and for each clip (default: all of
 tools/maya/test_animations.CLIPS) <base_name>.<clip>.anim.json with its baked
-<base_name>.<clip>.anim.fbx. Works on tagged rigs (V06) and Jeffy rigs (V010).
+<base_name>.<clip>.anim.fbx. Works on tagged rigs (V06) and setup rigs (V010).
 Then, in Unreal: import <base_name>.fbx, open a Control Rig on it, and run
 run_anim_import.py (it picks up every clip beside the FBX).
 

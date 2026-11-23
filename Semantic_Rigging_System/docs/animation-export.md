@@ -494,7 +494,7 @@ R1 (first Unreal run of the newer features) is still pending; clips 1–5 do
 not depend on it, clip 6 does.
 
 **Reference rig (2026-11-10).** The animation axes continue on Murakami
-**V010** (the matrix rig built with the Jeffy toolkit, `docs/jeffy-v010-support.md`,
+**V010** (the matrix rig built as a setup rig, `docs/setup-rig-v010-support.md`,
 phase J6): its five clips are exported in `FBXs/murakami_v010/` and the
 shared start is confirmed on it. V06 stays as the comparison rig. Phase 1a
 (the retake window) starts once the V010 Control Rig passes its pose check
@@ -587,13 +587,13 @@ Layer test (fk_body, frame 24): +10° on `C_HeadFK_CTL.Rotation.X` in the
 animator layer turns the `Head` bone 10.000° from the base; at layer weight
 0.5, 5.000°.
 
-**Found on the way: the Jeffy IK/FK blend.** Mid-switch (`ikfk_switch`,
-ikFk 0.5) the hand was 23 cm off. Maya's Jeffy limb blends each output
+**Found on the way: the setup rig's IK/FK blend.** Mid-switch (`ikfk_switch`,
+ikFk 0.5) the hand was 23 cm off. Maya's setup limb blends each output
 joint with a `blendMatrix` of the FK control's world matrix and the IK
 joint's world matrix (position lerp, rotation slerp, per joint). The
 two-bone IK node's Weight slerps the bones' world rotations and rebuilds
 the positions along the chain, so the hand swings on an arc. The pose check
-only probes ikFk 0 and 1, so it couldn't see this. `JeffyIKFKLimbModule`
+only probes ikFk 0 and 1, so it couldn't see this. `SetupIKFKLimbModule`
 now runs the solver and the end-bone rotation at weight 1 and blends each
 bone itself (`_blend_chains`): root and middle written without moving their
 children (so the later reads still see the IK pose), the end bone with them.

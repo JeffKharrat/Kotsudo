@@ -192,7 +192,7 @@ def _pick_get_length_of_spline_unit():
 
     UE 5.6 also has "Get Length At Param Of Spline" (length up to U, U = 0 by
     default): an alphabetical scan found it first and every length read 0,
-    which collapsed the Jeffy spline chord walk (V010 torso, 2026-11-17)."""
+    which collapsed the setup spline chord walk (V010 torso, 2026-11-17)."""
     try:
         unreal.load_module("ControlRigSpline")
     except Exception:

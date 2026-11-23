@@ -1,11 +1,11 @@
-"""Vector / transform maths in the Control Rig graph for the Jeffy modules.
+"""Vector / transform maths in the Control Rig graph for the setup modules.
 
 A thin layer over the RigVM math units (float, vector, quaternion,
 transform) that names every node after the module (so a rebuild clears
 them), picks the unit by name across engine builds and gives back the
 output pin path of each operation. The modules write the formulas of
-Jeffy's setups with it (soft IK, ribbons, spline chord walks), see
-docs/jeffy-v010-support.md.
+the toolkit's setups with it (soft IK, ribbons, spline chord walks), see
+docs/setup-rig-v010-support.md.
 
 Every method takes and returns PIN PATHS (``"Node.Result"``) or python
 constants; a constant is written into the node's default value, a pin is

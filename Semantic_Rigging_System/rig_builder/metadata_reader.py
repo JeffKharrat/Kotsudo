@@ -119,6 +119,38 @@ def detect_modules(bone_names, bone_attrs, supported_module_types=None):
     )
 
 
+def upgrade_setup_rig_names(data):
+    """Rewrite a setup-rig manifest exported before 2026-11-23 to today's names.
+
+    Those exports named the setup rig after the rigging toolkit that built it:
+    module types ``<Toolkit>.<type>``, ``"source": "<toolkit>"``, keys
+    ``<toolkit>_spline`` / ``_tag`` / ``_key`` / ``_space_role`` /
+    ``_setup`` and a ``<toolkit>`` manifest section. Today they are
+    ``Setup.<type>``, ``setup_rig``, ``setup_*``, ``setup_name`` and
+    ``setup_rig``. The old prefix is read from the data itself (a module
+    type prefix that, lower-cased, is the manifest's ``source.rig_tool``). A
+    re-export from Maya writes the new names directly.
+    """
+    if not isinstance(data, dict):
+        return data
+    rig_tool = str((data.get("source") or {}).get("rig_tool") or "")
+    old = None
+    for module in data.get("modules") or []:
+        prefix, dot, _ = str(module.get("module_type", "")).partition(".")
+        if dot and prefix != "Setup" and prefix.lower() == rig_tool:
+            old = prefix
+            break
+    if not old:
+        return data
+    lower = old.lower()
+    text = json.dumps(data)
+    text = text.replace('"{}.'.format(old), '"Setup.')
+    text = text.replace('"{}_setup"'.format(lower), '"setup_name"')
+    text = text.replace('"{}_'.format(lower), '"setup_')
+    text = text.replace('"{}"'.format(lower), '"setup_rig"')
+    return json.loads(text)
+
+
 def read_manifest_document(metadata):
     """The raw manifest dict from the asset metadata, or None."""
     suffix = ".{}".format(MANIFEST_JSON_ATTR).lower()
@@ -128,7 +160,7 @@ def read_manifest_document(metadata):
                 data = json.loads(str(raw_value))
             except (ValueError, TypeError):
                 return None
-            return data if isinstance(data, dict) else None
+            return upgrade_setup_rig_names(data) if isinstance(data, dict) else None
     return None
 
 
@@ -162,7 +194,7 @@ def read_manifest_from_ue_metadata(metadata):
     except (ValueError, TypeError):
         return None
 
-    return _parse_modules_from_manifest_data(data)
+    return _parse_modules_from_manifest_data(upgrade_setup_rig_names(data))
 
 
 def read_asset_metadata(asset):
@@ -233,16 +265,16 @@ def _parse_modules_from_manifest_data(data):
         controller_records = []
         seen = set()
         own_name = module_def["module_name"]
-        own_is_jeffy = str(module_def["module_type"]).startswith("Jeffy.")
+        own_is_setup = str(module_def["module_type"]).startswith("Setup.")
         # Records of this module filed under bones outside its chain (a
         # ribbon's bend controls sit on the limb joints they follow).
         candidates = [r for bone_name in module_def["chain"] for r in controller_map.get(bone_name, [])]
         candidates += [r for recs in controller_map.values() for r in recs if r.get("module_name") == own_name]
         for record in candidates:
             other = record.get("module_name")
-            if own_is_jeffy and other and other != own_name \
-                    and str(module_types.get(other, "")).startswith("Jeffy."):
-                continue  # another Jeffy setup's control (e.g. a ribbon's bend control on a limb bone)
+            if own_is_setup and other and other != own_name \
+                    and str(module_types.get(other, "")).startswith("Setup."):
+                continue  # another setup's control (e.g. a ribbon's bend control on a limb bone)
             copied = dict(record)
             for field in ("driven_bone", "anchor_bone", "parent", "source_node"):
                 if copied.get(field):

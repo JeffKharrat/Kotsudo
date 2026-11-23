@@ -175,7 +175,7 @@ class IKFKModule(RigModule):
             )
             fk_get_nodes.append(get_node)
         # Each bone's FK pose (global), for subclasses that blend the chains
-        # themselves (Jeffy: per-joint world blend, as Maya's blendMatrix).
+        # themselves (the toolkit: per-joint world blend, as Maya's blendMatrix).
         self._fk_pose_pins = [f"{node}.Transform" for node in fk_get_nodes]
 
         # ------------------------------------------------------------------

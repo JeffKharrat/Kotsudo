@@ -3,7 +3,7 @@
     "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe" tests/maya_anim_export_test.py <murakami_copy.ma> [out_dir]
 
 Keys each script-made clip (tools/maya/test_animations.py) on Murakami (V06,
-or V010 built with Jeffy), exports it, and checks the sidecar against what
+or V010 built as a setup rig), exports it, and checks the sidecar against what
 Maya computes:
 
   * frames, rate and range;
@@ -186,7 +186,7 @@ def main():
         if clip == "world":
             world = cast["world"]
             if world in doc["controls"]:
-                # An exported control (V010: Jeffy's rig_base global control): its own keys.
+                # An exported control (V010: the toolkit's rig_base global control): its own keys.
                 sources = {a: c["source"] for a, c in doc["controls"][world]["channels"].items()}
                 print("  {} is an exported control: {}".format(world, sources))
                 check(all(sources.get(a) == "keys" for a in ("translateX", "translateZ", "rotateY")),

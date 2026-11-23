@@ -205,7 +205,7 @@ def _probe_value(channel, current, attribute_info, unit_scale):
 # ---------------------------------------------------------------------------
 
 _FK_ROLES = ("bone_driver", "constraint_driver")
-# ik_control: a spline's IK controls (Jeffy chain mode blends them with the FK ones)
+# ik_control: a spline's IK controls (setup chain mode blends them with the FK ones)
 _IK_ROLES = ("ik_effector", "effector", "pole_vector", "pv", "ik_control")
 
 

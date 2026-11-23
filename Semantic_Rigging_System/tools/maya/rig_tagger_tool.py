@@ -35,7 +35,7 @@ except ImportError:
 
 import export_rig_manifest as erm
 import export_animation as ea
-import jeffy_reader
+import setup_reader
 
 try:
     USER_ROLE = QtCore.Qt.UserRole
@@ -331,11 +331,11 @@ def untag_module(module_name):
 
 def scene_modules():
     """The modules the tool shows and exports: Kotsudo tags when the scene has
-    any, else the setups of a rig built with the Jeffy toolkit."""
+    any, else the setups of a setup rig."""
     tagged = read_all_tagged_modules()
-    if tagged or not jeffy_reader.is_jeffy_rig():
+    if tagged or not setup_reader.is_setup_rig():
         return tagged
-    return jeffy_reader.modules_config()
+    return setup_reader.modules_config()
 
 
 def read_all_tagged_modules():
@@ -446,14 +446,14 @@ def validate_module(module_def, graph_analysis=None):
         add("red", "module has no joints")
         return "red", "module has no joints"
 
-    if module_def.get("source") == "jeffy":
+    if module_def.get("source") == "setup_rig":
         missing = [joint for joint in chain if not cmds.objExists(joint)]
         if missing:
-            return "red", "Jeffy setup drives missing joint(s): {}".format(", ".join(_short_name(j) for j in missing))
-        setup_type = module_type[len(jeffy_reader.MODULE_PREFIX):]
-        if setup_type in jeffy_reader.UNREAL_SUPPORTED_TYPES:
-            return "green", "read from the Jeffy setup ({} joint(s))".format(len(chain))
-        return "orange", ("read from the Jeffy setup ({} joint(s)); exported, but the Unreal builder does not "
+            return "red", "setup drives missing joint(s): {}".format(", ".join(_short_name(j) for j in missing))
+        setup_type = module_type[len(setup_reader.MODULE_PREFIX):]
+        if setup_type in setup_reader.UNREAL_SUPPORTED_TYPES:
+            return "green", "read from the setup ({} joint(s))".format(len(chain))
+        return "orange", ("read from the setup ({} joint(s)); exported, but the Unreal builder does not "
                           "rebuild '{}' setups yet".format(len(chain), setup_type))
 
     module_types = module_def.get("_module_types", [])

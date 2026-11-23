@@ -1253,15 +1253,15 @@ def root_joint():
     """Long name of the exported skeleton's top joint, or None.
 
     ``root`` (ROOT_JOINT_NAME) when the scene has it; else the root joint a
-    rig tool declares (Jeffy's ``rig_base`` setup: ``Root`` on Murakami
+    rig tool declares (the toolkit's ``rig_base`` setup: ``Root`` on Murakami
     V010); else a top-level joint named root in any case.
     """
     found = cmds.ls(ROOT_JOINT_NAME, long=True, type='joint') or []
     if len(found) == 1:
         return found[0]
     try:
-        import jeffy_reader
-        declared = jeffy_reader.root_joint()
+        import setup_reader
+        declared = setup_reader.root_joint()
     except ImportError:
         declared = None
     if declared:
@@ -1489,7 +1489,7 @@ def _attribute_driver(plug, depth=0):
     if kind == 'remapValue' and attribute.startswith('outValue'):
         # Supported when its curve is the default straight line from (0, 0)
         # to (1, 1): a clamped linear remap (the ramp holds its end values
-        # outside the input range). The Jeffy wires are built that way.
+        # outside the input range). The setup wires are built that way.
         limits = [node + '.' + name for name in ('inputMin', 'inputMax', 'outputMin', 'outputMax')]
         if any(connected(pl) for pl in limits):
             return None, None, 'remapValue with driven limits'
@@ -1527,14 +1527,14 @@ _blendshape_driver = _attribute_driver     # former name, kept for callers
 
 
 def blendshape_registered(blendshape):
-    """Registered in the tool; a blendShape a Jeffy wire setup drives counts
+    """Registered in the tool; a blendShape a setup wire setup drives counts
     as registered until the tool says otherwise (the rig declares it)."""
     plug = '{}.{}'.format(blendshape, BLENDSHAPE_EXPORT_ATTR)
     if cmds.objExists(plug):
         return bool(cmds.getAttr(plug))
     try:
-        import jeffy_reader
-        return blendshape in jeffy_reader.wired_blendshapes()
+        import setup_reader
+        return blendshape in setup_reader.wired_blendshapes()
     except ImportError:
         return False
 
@@ -2159,10 +2159,10 @@ def collect_bone_controller_manifest(modules_config):
         if not chain:
             continue
         module_name = module.get('module_name') or ''
-        if module.get('source') == 'jeffy':
-            # The Jeffy reader knows each setup's controls, parents and spaces.
-            import jeffy_reader
-            for bone, snapshot in jeffy_reader.bone_controller_entries(module):
+        if module.get('source') == 'setup_rig':
+            # The setup reader knows each setup's controls, parents and spaces.
+            import setup_reader
+            for bone, snapshot in setup_reader.bone_controller_entries(module):
                 _append(bone, snapshot)
             continue
 
@@ -4174,13 +4174,13 @@ def build_manifest(rig_name, modules_config):
         "control_shapes": dict(_SHAPE_REGISTRY),
         "modules": modules,
     }
-    # A rig built with the Jeffy toolkit describes its own setups: carry that
-    # description (with Kotsudo controller snapshots of every Jeffy control).
-    if any(module.get("source") == "jeffy" for module in modules_config):
-        import jeffy_reader
-        manifest["jeffy"] = jeffy_reader.manifest_section()
-        manifest["source"]["rig_tool"] = "jeffy"
-        # Shapes registered while snapshotting the Jeffy controls.
+    # A setup rig describes its own setups: carry that
+    # description (with Kotsudo controller snapshots of every setup control).
+    if any(module.get("source") == "setup_rig" for module in modules_config):
+        import setup_reader
+        manifest["setup_rig"] = setup_reader.manifest_section()
+        manifest["source"]["rig_tool"] = "setup_rig"
+        # Shapes registered while snapshotting the setup controls.
         manifest["control_shapes"] = dict(_SHAPE_REGISTRY)
     return manifest
 
@@ -4697,15 +4697,15 @@ def scene_analysis(rig_name, modules_config):
                 group_drivers.add((weight['control'], weight['attr']))
     morph_drivers = {(e['driver']['control'], e['driver']['attr'])
                      for e in manifest.get('blendshapes') or [] if e.get('driver')}
-    # Attributes a matrix-rig (Jeffy) module rebuilds itself.
+    # Attributes a matrix setup-rig module rebuilds itself.
     module_attributes = {}
-    if manifest.get('jeffy') or any(str(m.get('module_type', '')).startswith('Jeffy.')
+    if manifest.get('setup_rig') or any(str(m.get('module_type', '')).startswith('Setup.')
                                     for m in manifest.get('modules') or []):
         try:
-            import jeffy_reader
-            module_attributes = jeffy_reader.transferred_attributes(manifest)
+            import setup_reader
+            module_attributes = setup_reader.transferred_attributes(manifest)
         except Exception as exc:
-            check('orange', 'Not transferred', 'Jeffy setups', 'could not list the rebuilt attributes ({})'.format(exc))
+            check('orange', 'Not transferred', 'setups', 'could not list the rebuilt attributes ({})'.format(exc))
     for (name, attr), note in sorted(module_attributes.items()):
         if note:
             check('gray', 'Partly transferred', '{}.{}'.format(name, attr), note)

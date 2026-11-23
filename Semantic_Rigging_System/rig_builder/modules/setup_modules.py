@@ -1,22 +1,22 @@
-"""Modules for rigs built with the Jeffy toolkit (docs/jeffy-v010-support.md).
+"""Modules for setup rigs (docs/setup-rig-v010-support.md).
 
-The Maya exporter describes every control of the supported Jeffy setups as
-a standard Kotsudo controller record (tools/maya/jeffy_reader.py): its
+The Maya exporter describes every control of the supported setups as
+a standard Kotsudo controller record (tools/maya/setup_reader.py): its
 parent controllers, its space switch (a blended space, one target per
 space) and its driven offset groups (``length`` moving the next control).
 So the Unreal side reuses the FK machinery:
 
-* ``Jeffy.fk_chain`` -- one control per joint; the joint copies its
-  control's world transform (Jeffy's contract: joint world = output world,
+* ``Setup.fk_chain`` -- one control per joint; the joint copies its
+  control's world transform (the toolkit's contract: joint world = output world,
   and an FK output is its control).
-* ``Jeffy.rig_base`` -- the global and root controls; ``globalScale``
+* ``Setup.rig_base`` -- the global and root controls; ``globalScale``
   scales the global control (and everything under it); the root joint
   copies the root control.
-* ``Jeffy.ikfk_limb`` -- Kotsudo's IK/FK limb (FK controls, Basic IK, the
-  switch control), plus Jeffy's IK goal maths: soft IK, stretch, pin to the
+* ``Setup.ikfk_limb`` -- Kotsudo's IK/FK limb (FK controls, Basic IK, the
+  switch control), plus the toolkit's IK goal maths: soft IK, stretch, pin to the
   pole, upper / lower lengths and the pole twist (``ikfk_limb._ik_goal``).
 
-The ribbon and spline modules are in jeffy_ribbon.py.
+The ribbon and spline modules are in setup_ribbon.py.
 """
 
 import math
@@ -27,13 +27,13 @@ try:
 except ImportError:
     unreal = cast(Any, None)
 
-from .. import driver_ops, graph_utils, jeffy_math
+from .. import driver_ops, graph_utils, setup_math
 from .fk_module import FKModule
 from .ikfk_module import IKFKModule
 
 
-class JeffyFKChainModule(FKModule):
-    module_type = "Jeffy.fk_chain"
+class SetupFKChainModule(FKModule):
+    module_type = "Setup.fk_chain"
 
     @classmethod
     def describe_contract(cls):
@@ -44,8 +44,8 @@ class JeffyFKChainModule(FKModule):
         return contract
 
 
-class JeffyRigBaseModule(FKModule):
-    module_type = "Jeffy.rig_base"
+class SetupRigBaseModule(FKModule):
+    module_type = "Setup.rig_base"
     # Global / root controls: before the modules whose spaces follow them.
     solve_stage = "spaces"
 
@@ -112,16 +112,16 @@ class JeffyRigBaseModule(FKModule):
             # A limb's end bone takes the rig scale from here, as in Maya.
             self.context.rig_scale_control = control_name
             if self.logger:
-                self.logger.log(f"[JeffyRigBase] '{control_name}': globalScale scales the control.")
+                self.logger.log(f"[SetupRigBase] '{control_name}': globalScale scales the control.")
         except Exception as exc:
             self.context._warn(f"globalScale of '{control_name}' not rebuilt ({exc}).")
 
 
-class JeffyIKFKLimbModule(IKFKModule):
-    """Jeffy's IK/FK limb on Kotsudo's IK/FK module.
+class SetupIKFKLimbModule(IKFKModule):
+    """The toolkit's IK/FK limb on Kotsudo's IK/FK module.
 
     The FK controls, the IK control, the pole and the switch come from the
-    controller records as for a tagged rig. What Jeffy adds is the IK goal:
+    controller records as for a tagged rig. What the toolkit adds is the IK goal:
     the effector the solver reaches for is not the IK control but a point
     computed from it (soft IK, stretch, pin), the bone lengths follow the
     ``upperLength`` / ``lowerLength`` / stretch / pin values, and ``twist``
@@ -137,7 +137,7 @@ class JeffyIKFKLimbModule(IKFKModule):
         bone lengths = [upper, lower] * f, then lerp(.., distance to / from the pole, pin)
     """
 
-    module_type = "Jeffy.ikfk_limb"
+    module_type = "Setup.ikfk_limb"
 
     @classmethod
     def describe_contract(cls):
@@ -152,7 +152,7 @@ class JeffyIKFKLimbModule(IKFKModule):
         # Measured in Maya under globalScale = 2: of a limb, only the END joint
         # carries the rig scale (the hand / foot, and through it the toe that
         # follows it); the root, the middle and the ribbons stay at 1.
-        graph = jeffy_math.Graph(self.context, f"{graph_utils.sanitize_name(self.name)}_RigScale")
+        graph = setup_math.Graph(self.context, f"{graph_utils.sanitize_name(self.name)}_RigScale")
         self._blend_chains(graph, result)
         if getattr(self.context, "rig_scale_control", None):
             graph.apply_rig_scale(str(self.chain[-1]).split("|")[-1])
@@ -164,15 +164,15 @@ class JeffyIKFKLimbModule(IKFKModule):
         ik_rest = (getattr(self.context, "maya_rest_pose", None) or {}).get(bone) or {}
         if not fk_rest.get("q") or not ik_rest.get("q"):
             return solved
-        initial = jeffy_math.plain(self.context.hierarchy.get_global_transform(
+        initial = setup_math.plain(self.context.hierarchy.get_global_transform(
             graph_utils.make_key(unreal.RigElementType.BONE, bone), True))
-        turn = jeffy_math.q_mul([float(c) for c in fk_rest["q"]], jeffy_math.q_inverse([float(c) for c in ik_rest["q"]]))
-        target = (jeffy_math.q_mul(turn, initial[0]), [float(c) for c in fk_rest["t"]])
-        q, t = jeffy_math.compose(target, jeffy_math.inverse(initial))
-        return graph.make_absolute(jeffy_math.transform(q, t), solved)
+        turn = setup_math.q_mul([float(c) for c in fk_rest["q"]], setup_math.q_inverse([float(c) for c in ik_rest["q"]]))
+        target = (setup_math.q_mul(turn, initial[0]), [float(c) for c in fk_rest["t"]])
+        q, t = setup_math.compose(target, setup_math.inverse(initial))
+        return graph.make_absolute(setup_math.transform(q, t), solved)
 
     def _blend_chains(self, graph, result):
-        """IK/FK blend as Maya's Jeffy limb does it: each output joint is a
+        """IK/FK blend as Maya's setup limb does it: each output joint is a
         blendMatrix of the FK control's world matrix and the IK joint's world
         matrix, weighted by ikFk (position lerp, rotation slerp, per joint).
 
@@ -182,7 +182,7 @@ class JeffyIKFKLimbModule(IKFKModule):
         its end-bone rotation) run at full weight, and this blends afterwards.
 
         The middle joint also takes a constant offset per mode. IK: measured
-        after the compile (the builder's rest bake), Jeffy's bind pose keeps the
+        after the compile (the builder's rest bake), the toolkit's bind pose keeps the
         joint of a nearly straight limb slightly off the solved one. FK: from
         Maya's FK rest pose, the FK chain rests 0.38 cm from the IK one on
         V010's arms."""
@@ -207,7 +207,7 @@ class JeffyIKFKLimbModule(IKFKModule):
         # written without moving their children, so the later reads still see
         # the IK pose; the end bone carries its children (hand, toes).
         ik_poses = [graph.get_transform("Bone", bone) for bone in bones]
-        corrected = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), ik_poses[1])
+        corrected = graph.make_absolute(setup_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), ik_poses[1])
         fk_poses = list(fk_pins)
         fk_poses[1] = self._fk_middle_offset(graph, limb, bones[1], fk_pins[1])
         targets = [graph.tlerp(fk_poses[i], corrected if i == 1 else ik_poses[i], ik_fk) for i in range(3)]
@@ -222,7 +222,7 @@ class JeffyIKFKLimbModule(IKFKModule):
         data = super().read_recipe()
         extra = self.resolve_recipe_fields({"Limb": None}, fallback_names={"Limb": ["limb"]})
         data["Limb"] = extra.get("Limb") if isinstance(extra.get("Limb"), dict) else {}
-        # Jeffy: in IK the end joint takes the IK control's rotation (its
+        # The toolkit: in IK the end joint takes the IK control's rotation (its
         # IkEnd group), the chains blend in world space, no engine stretch.
         data["IKEndOrient"] = True
         data["RootLocalBlend"] = False
@@ -233,7 +233,7 @@ class JeffyIKFKLimbModule(IKFKModule):
                                   module_prefix, ik_node, get_pole_node, ik_pole_ctrl, ik_col, pv_scale,
                                   recipe_data, effector_pin):
         limb = recipe_data.get("Limb") or {}
-        graph = jeffy_math.Graph(self.context, f"{module_prefix}_Goal")
+        graph = setup_math.Graph(self.context, f"{module_prefix}_Goal")
         goal = None
         try:
             goal = self._goal_inputs(graph, hierarchy, hierarchy_controller, limb, module_prefix)
@@ -346,5 +346,5 @@ class JeffyIKFKLimbModule(IKFKModule):
             if not graph_utils.connect_pins(controller, model, rotated, pole_pin):
                 raise RuntimeError("could not connect the twisted pole vector")
         if self.logger:
-            self.logger.log(f"[JeffyLimb] '{self.name}': soft IK / stretch / pin / lengths"
+            self.logger.log(f"[SetupLimb] '{self.name}': soft IK / stretch / pin / lengths"
                             f"{' / twist' if twist_attribute else ''} rebuilt on the IK goal.")

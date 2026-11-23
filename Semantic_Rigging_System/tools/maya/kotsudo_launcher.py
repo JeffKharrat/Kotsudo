@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 
 # Dependencies before the modules that import them.
-MODULES = ("export_rig_manifest", "jeffy_reader", "export_test_poses", "export_animation",
+MODULES = ("export_rig_manifest", "setup_reader", "export_test_poses", "export_animation",
            "test_animations", "rig_tagger_tool")
 
 

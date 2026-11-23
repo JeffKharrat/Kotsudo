@@ -1,6 +1,6 @@
 # Build and export speed
 
-Measured on Murakami V010 (Jeffy matrix rig, 117 joints, 87 controls,
+Measured on Murakami V010 (the matrix setup rig, 117 joints, 87 controls,
 31 modules), 2026-11-17.
 
 ## Where the hour went
@@ -27,10 +27,10 @@ The rest of the Maya export, profiled (`cProfile`, mayapy):
 | Part | Time |
 |---|---|
 | 635 test poses (set a channel, read 117 joint + 87 control matrices) | 19 s |
-| Describing the Jeffy setups (`build_manifest`) | 15 s |
+| Describing the setups (`build_manifest`) | 15 s |
 | FBX write and shapes | 2 s |
 
-Cheap wins left there: `jeffy_reader.read_setups()` is called 63 times
+Cheap wins left there: `setup_reader.read_setups()` is called 63 times
 (6.5 s; cache it per export), `cmds.upAxis` 390,000 times (2.6 s; cache it
 per export), `cmds.attributeQuery` 113,000 times (7.8 s), and pose reads
 through `cmds.xform` (OpenMaya `MDagPath.inclusiveMatrix` halves them).
@@ -107,7 +107,7 @@ Ordered by gain for the effort.
    rig smaller to evaluate.
 4. **Maya: cache the scene reads** listed above (about 15 s of 36 s).
 5. **Pose check on demand.** It already costs 2 s; keep it in the build.
-6. **Long term: a compiled solver.** The Jeffy ribbons and splines become
+6. **Long term: a compiled solver.** The setup ribbons and splines become
    hundreds of nodes because Control Rig has no strip or chord-walk node.
    A small C++ RigUnit per setup type (ribbon point, spline chord walk)
    would replace about 300 nodes with one each: faster to build, faster

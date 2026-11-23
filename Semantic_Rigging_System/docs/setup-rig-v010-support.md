@@ -1,6 +1,6 @@
-# Murakami V010 (Jeffy rig): support plan
+# Murakami V010 (setup rig): support plan
 
-Status (2026-11-10): **J0 built** (Jeffy reader, export of V010). **J1
+Status (2026-11-10): **J0 built** (setup reader, export of V010). **J1
 built**: in Unreal, 4 of 5 V010 clips are T0 and 1 is T1 (better than V06),
 confirmed after the `Root` name fix (97 bones scored, `Root` included).
 **J2 built** (FK chains, spaces, `length`, rig base, face-slider wires):
@@ -8,14 +8,14 @@ the Unreal build runs (21 modules, 629 nodes); its pose check was first run
 against the wrong poses file (fixed: the harness never borrows another
 rig's poses). **J3, J4, J5 built** (limbs, ribbons, splines: all 35 setups
 now reach the Unreal builder); their maths is checked against Maya by
-`tests/maya_jeffy_reader_test.py`; the Unreal build and pose check of the
+`tests/maya_setup_reader_test.py`; the Unreal build and pose check of the
 whole rig are next (section "J3–J5"). J6 follows that run.
 
 Update (2026-11-12): the first full Unreal run (31 modules) calibrated at
 rest to 0.002 cm, but the torso spline stopped on a pin name and every
 module below it was skipped (see "J3–J5 in Unreal, first run"). Fixed,
-with every node and pin of the Jeffy modules now checked against the UE
-5.6 headers. The pre-export check knows what the Jeffy modules rebuild:
+with every node and pin of the setup modules now checked against the UE
+5.6 headers. The pre-export check knows what the setup modules rebuild:
 V010 analyses with 0 errors, 0 to review.
 
 ### J3–J5 in Unreal, second run (2026-11-17)
@@ -30,7 +30,7 @@ and probing the rig at rest:
   before *Get Length*: every chord-walk step was 0. It now asks for
   `RigUnit_GetLengthControlRigSpline` by name (also used by Kotsudo's
   Spline IK squash).
-- **Offsets in the wrong frame.** Jeffy's column offsets and half-width
+- **Offsets in the wrong frame.** The toolkit's column offsets and half-width
   vectors are measured in each Maya control's (or joint's) own axes, but
   Kotsudo builds an Unreal control aligned to its anchor bone (the torso
   and neck IK controls rest turned −90° about X) and Unreal bones have
@@ -43,7 +43,7 @@ and probing the rig at rest:
 - **Ribbon bend controls missing.** A module only received the records
   filed under its own chain bones; a ribbon's bend controls are filed under
   the limb joints. A module now also receives every record carrying its
-  name, and a Jeffy module no longer receives another Jeffy setup's records.
+  name, and a setup module no longer receives another setup's records.
 
 Result after the first two fixes: calibration p95 1.2 cm (from 667 cm),
 torso and limbs within 0.1–0.3 cm on every pose. Left at that point: the
@@ -74,9 +74,9 @@ The pose check's calibration now passes on V010: joints at rest are within
 0.0057 cm of Maya (p95 0.0033 cm, it was 0.34 cm).
 
 - Control Rig's spline shifts U by `KINDA_SMALL_NUMBER`, so the curve stops
-  0.076 cm short of both ends, and its tangent is sampled. Each Jeffy spline
+  0.076 cm short of both ends, and its tangent is sampled. Each setup spline
   bone now carries a constant offset on its IK result.
-- Jeffy's bind pose keeps the elbow of the nearly straight arm 0.18 cm off the
+- The toolkit's bind pose keeps the elbow of the nearly straight arm 0.18 cm off the
   solved one. The limb's middle bone carries the same kind of offset, blended
   by `ikFk` so FK is untouched.
 - The builder's rest bake repeats until nothing moves (three passes on V010):
@@ -118,7 +118,7 @@ silently uses stale data. Import so the skeleton's metadata is replaced.
 ### J3–J5 in Unreal, first run (2026-11-10)
 
 - Rest calibration OK: joints max 0.0019 cm, controls 0.0001 cm.
-- `C_spine` (Jeffy.spline) failed: *Transform Vector*'s input is
+- `C_spine` (Setup.spline) failed: *Transform Vector*'s input is
   `Location` in UE 5.6 (the module fed `Vector` / `Value`). Every module
   under the torso (limbs, ribbons, neck, eyes, tentacles) was skipped, so
   only 9 of 87 controls existed and no pose could be applied.
@@ -136,7 +136,7 @@ silently uses stale data. Import so the skeleton's metadata is replaced.
   gray "Partly transferred" note.
 - Pre-export check: limb `upperLength` / `lowerLength` / `softness` /
   `stretch` / `pin` / `twist`, spline `stretch`, the wave attributes and
-  `globalScale` are no longer "Not transferred" (the Jeffy modules rebuild
+  `globalScale` are no longer "Not transferred" (the setup modules rebuild
   them). Offset groups placed by a matrix network that a module rebuilds
   (ribbon bend groups, spline FK zeros carrying the wave, settings groups
   following the limb end) are marked `module` with what places them
@@ -148,30 +148,30 @@ All of V010 is now described for the Unreal builder. The rule stays the
 same as J2: the controls are standard Kotsudo records (parents, spaces,
 driven groups, attributes), and what a record cannot carry -- the maths
 of a setup -- is **measured** from the scene into the module's `params`
-(`limb`, `ribbon`, `jeffy_spline`), then rebuilt as float / vector nodes
-(`rig_builder/jeffy_math.py`).
+(`limb`, `ribbon`, `setup_spline`), then rebuilt as float / vector nodes
+(`rig_builder/setup_math.py`).
 
-**J3 `ikfk_limb` → `Jeffy.ikfk_limb`** (`modules/jeffy_modules.py`):
+**J3 `ikfk_limb` → `Setup.ikfk_limb`** (`modules/setup_modules.py`):
 Kotsudo's IK/FK module (FK controls, Basic IK, the switch control) with
-Jeffy's IK goal in front of the solver: the effector is not the IK control
+The toolkit's IK goal in front of the solver: the effector is not the IK control
 but `goal` from `ikfk_limb._ik_goal` (soft IK, stretch, pin), the bone
 lengths follow `upperLength` / `lowerLength` × stretch factor, pinned to
 the pole distances by `pin`, and `twist` turns the pole position about the
 start→end axis (Maya +30° measured as +30° right-handed; Unreal's mirrored
 axes get −twist). The FK root's *orient* space keeps its translation on
-the first space (the chest / pelvis output), as Jeffy's blendMatrix does.
+the first space (the chest / pelvis output), as the toolkit's blendMatrix does.
 `ikFk` proxies on the limb controls, `autoSnap` and the `sep_*` separators
 are dropped from the records (one switch, on the settings control, which
 follows the end joint).
 
-**J4 `ribbon` → `Jeffy.ribbon`** (`modules/jeffy_ribbon.py`, solve stage
+**J4 `ribbon` → `Setup.ribbon`** (`modules/setup_ribbon.py`, solve stage
 "helpers", after the limb): no NURBS surface is built. A point of a degree
 3 × 1 strip at fixed (u, v = ½) is a fixed weighted sum of its 5 column
 positions (Cox–de Boor weights, computed once in Maya), its tangent the
 derivative weights, its width direction the same weights on each column's
 rotated half-width vector. The pin frame is Aim Math on those two
 directions (which pin axes they are is fitted at rest), and the joint is
-`(joint_rest · pin_rest⁻¹) · pin`. The columns are the expressions Jeffy
+`(joint_rest · pin_rest⁻¹) · pin`. The columns are the expressions the toolkit
 wires (`ribbon.py`): the limb bones, an aimMatrix (first segment, roll from
 the parent output), the bend controls and blendMatrix halves of those, read
 from the scene as a small expression tree. The bend controls hang from
@@ -179,7 +179,7 @@ nulls re-written every frame from their follow blend. `bendyVis` shows and
 hides them. Verified in Maya: the predicted joints equal the real ones at
 rest and posed (see the test's "ribbon maths vs Maya" line).
 
-**J5 `spline` → `Jeffy.spline`**: the 7 columns ride on the IK controls
+**J5 `spline` → `Setup.spline`**: the 7 columns ride on the IK controls
 (constant local offsets), so a Control Rig spline through the column
 centres (B-spline mode, clamped uniform knots = Maya's) is the ribbon's
 middle curve. Finding: Maya's spline IK places each hidden joint on the
@@ -205,9 +205,9 @@ Also: open attribute ranges (`twist`, `length` with no maximum) become
 unlimited channels (they were clamped to 0..1), and the pose exporter
 probes such attributes by +1 instead of jumping to their minimum.
 
-### J2: how the Jeffy setups reach the Unreal builder
+### J2: how the setups reach the Unreal builder
 
-The Jeffy reader now describes the controls of `fk_chain` and `rig_base` as
+The setup reader now describes the controls of `fk_chain` and `rig_base` as
 **standard Kotsudo controller records** (`bone_controllers`), so the
 existing FK, space and driven-group machinery rebuilds them:
 
@@ -215,8 +215,8 @@ existing FK, space and driven-group machinery rebuilds them:
   control's world matrix (`OUT_MM = CTL.world · Outputs_GRP⁻¹`), so the
   control that places an output is that joint's `bone_driver`. `rig_base`:
   `Root` copies `C_root_CTL`; `C_global_CTL` drives no joint.
-* **Parents.** The Jeffy controls above a control, up to its space group
-  (Kotsudo's own walk stopped at Jeffy's matrix-driven groups).
+* **Parents.** The setup controls above a control, up to its space group
+  (Kotsudo's own walk stopped at the toolkit's matrix-driven groups).
 * **Spaces.** The anchor's choice node (`space` enum → `offset · target.world`)
   becomes a blended space: one target per space (an output → its joint, a
   control → that control), weight = (`space` == i), and the control's pose
@@ -232,20 +232,20 @@ existing FK, space and driven-group machinery rebuilds them:
   everything under it follows, as in Maya.
 * **Face sliders.** The 4 `wire_attribute` setups are `remapValue` nodes
   (0–10 → 0–1, clamped): the walker now reads a default-curve
-  `remapValue` as a clamped remap, and blendShapes driven by a Jeffy wire
+  `remapValue` as a clamped remap, and blendShapes driven by a setup wire
   count as registered. Their control `C_Spine5IK3_CTL` (a neck control,
   J5) is built as a settings control until then: its sliders work, it moves
   no joint yet.
-* Unreal: `Jeffy.fk_chain` is the FK module on these records;
-  `Jeffy.rig_base` builds the global control, wires `globalScale`, then the
+* Unreal: `Setup.fk_chain` is the FK module on these records;
+  `Setup.rig_base` builds the global control, wires `globalScale`, then the
   root control and `Root` (solve stage "spaces", built first). Chosen over continuing the animation work on V06: the
 animation axes resume on V010 once it rebuilds in Unreal (phase J6).
 
 ### J1 so far (Maya side)
 
 * The test clips (`tools/maya/test_animations.py`) exist for both rigs:
-  `CASTS` names, per rig, the controls each clip keys (V010: Jeffy names).
-* The Jeffy reader declares each setup's **IK/FK switch** in the manifest
+  `CASTS` names, per rig, the controls each clip keys (V010: the setup rig's names).
+* The setup reader declares each setup's **IK/FK switch** in the manifest
   as tagged rigs do (`params.switch`: the settings control's `ikFk`, 1 = IK,
   0 = FK, measured on V010). The clips and the pose check now find the 5
   switches (4 limbs, neck); test poses: 664.
@@ -290,37 +290,37 @@ case (`ROOT` → `ROOT_Mesh`), and the FBX check after export flags names
 that differ only by case. Re-imported and re-checked: the bone is `Root`,
 97 bones are scored (96 before: `Root` was missing), verdicts unchanged.
 
-### J0 result (Maya test `tests/maya_jeffy_reader_test.py` on V010)
+### J0 result (Maya test `tests/maya_setup_reader_test.py` on V010)
 
 * 35 setups read (20 fk_chain, 4 ikfk_limb, 4 ribbon, 2 spline, 1 rig_base,
   4 wire_attribute), 87 controls; root `Root` (from `rig_base`).
-* 31 modules (`Jeffy.<type>`, chain = driven joints in output order); the 4
-  wires stay in the manifest's `jeffy` section. No joint in two modules.
+* 31 modules (`Setup.<type>`, chain = driven joints in output order); the 4
+  wires stay in the manifest's `setup_rig` section. No joint in two modules.
 * Full export: FBX verified, 78/78 control shapes, manifest valid with a
-  `jeffy` section (87 control records, each a Kotsudo controller snapshot);
+  `setup_rig` section (87 control records, each a Kotsudo controller snapshot);
   the pose check finds all 87 controls; 663 test poses.
-* A clip keyed on Jeffy controls exports; its samples equal a fresh capture.
+* A clip keyed on setup controls exports; its samples equal a fresh capture.
 * **Rig finding:** 6 skinned joints are driven by no setup and simply follow
   their parent: `L/R_ArmLeaf4`, `L/R_Cheek` (helpers in V06 too) and
   `L/R_LegLeaf4` (the foot, which had its own control `L_FootFKctrl` in V06).
-* The Unreal builder skips the Jeffy modules with one line ("Jeffy setups
+* The Unreal builder skips the setup modules with one line ("setups
   not rebuilt yet") until J2–J5 add them.
 
-Code: `tools/maya/jeffy_reader.py`; `export_rig_manifest.root_joint()` /
+Code: `tools/maya/setup_reader.py`; `export_rig_manifest.root_joint()` /
 `manifest_plug()` (root no longer has to be named `root`); the auto-detection
 walk uses long names (mesh `Head` vs joint `Head`); the tagger tool's
-`scene_modules()` lists Jeffy setups when the scene has no Kotsudo tags.
+`scene_modules()` lists setups when the scene has no Kotsudo tags.
 
 Sources: the scene `AutodeskMaya/Murakami_LightCharacter_V010.ma` (analysed
-in Maya 2026; it is saved in 2027) and the Jeffy toolkit's code
-(<https://github.com/JeffKharrat/Jeffy-Toolkit>, commit `d1f65b3`, read, not
+in Maya 2026; it is saved in 2027) and its rigging toolkit's code
+(commit `d1f65b3`, read, not
 run).
 
 ---
 
 ## 1. What changed from V06
 
-V010 is Murakami re-rigged with Jeffy ("Jeff Inventory" 2.0): same bind
+V010 is Murakami re-rigged as a setup rig: same bind
 skeleton idea and same size (head at 1338 cm; the scene is now in cm
 instead of m), but every behaviour is rebuilt with matrix nodes.
 
@@ -332,23 +332,23 @@ instead of m), but every behaviour is rebuilt with matrix nodes.
 | Top joint | `root` | `Root` (then `Pelvis`) |
 | Space switches | 0 | 37 (enum → choice → multMatrix) |
 | Module tags (`rigTag_*`) | yes | none |
-| Setup description | none | 35 Jeffy `*_SETUP` network nodes |
+| Setup description | none | 35 `*_SETUP` network nodes |
 
 Today Kotsudo finds **0 modules and 0 controls** in V010 (it looks for
 `root`, `rigTag_*` tags, ikHandles on the bind chain, constraints and
 pairBlends). The Checks tab reports the stretch / pin / length attributes
 (19 items) as "not transferred".
 
-## 2. The key fact: Jeffy's contract
+## 2. The key fact: the toolkit's contract
 
-Every Jeffy setup ends in **outputs** (one transform per bind joint), and
+Every setup ends in **outputs** (one transform per bind joint), and
 each bind joint is driven so that
 
 ```
 joint world matrix = output world matrix      (game safe: no stretch scale)
 ```
 
-(`jeffy/setups/core/drive.py`: `local = output.world * parent.worldInverse`,
+(`setup/setups/core/drive.py`: `local = output.world * parent.worldInverse`,
 parent scale compensated, joint orient and rotate axis taken out.) Every
 V010 setup is built with `game_safe` on, so bind joints never get stretch
 scale: stretch moves child joints instead. That is exactly what an engine
@@ -358,23 +358,23 @@ So rebuilding V010 in Unreal means: **compute each output's world
 transform with Control Rig nodes, and set the bone to it.** The bone part
 is trivial (Set Transform, global); the work is in the outputs.
 
-And Jeffy **declares** each setup in the scene (network node `*_SETUP`):
+And the toolkit **declares** each setup in the scene (network node `*_SETUP`):
 
-* `jeffySetupType`, name, side, version, `jeffy_options` (JSON);
-* `jeffy_slots`: the joints it was built on (start, mid, end...);
-* `jeffy_anchors`: its spaces (kind parent / orient / point, the space
+* `setupSetupType`, name, side, version, `setup_options` (JSON);
+* `setup_slots`: the joints it was built on (start, mid, end...);
+* `setup_anchors`: its spaces (kind parent / orient / point, the space
   roles, the enum attribute, the rest matrix);
-* `jeffy_rest`: the bind joints' rest channels;
+* `setup_rest`: the bind joints' rest channels;
 * message links to its controls, outputs, systems and driven joints.
 
 This is the "declared intent" Kotsudo otherwise asks the artist to tag by
-hand. **Kotsudo reads it** (a Jeffy reader beside the tag reader), and keeps
+hand. **Kotsudo reads it** (a setup reader beside the tag reader), and keeps
 measuring the values from the scene (rest matrices, weights) and checking
 the result with the pose check, as for any rig.
 
 ## 3. Setup by setup
 
-| Jeffy setup (V010 count) | What it computes | Unreal rebuild | Expected match |
+| setup (V010 count) | What it computes | Unreal rebuild | Expected match |
 |---|---|---|---|
 | `rig_base` (1) | Global and Root controls, `globalScale` | two controls; global scale = uniform scale of everything under Global | exact |
 | `fk_chain` (20: 12 petals, eyes, eyelids, toes) | one control per joint; outputs = control world matrices; `length` stretch moves the next control along the bone; spaces on the top control | Kotsudo FK, plus `length` (translate the child zero along the bone) | exact |
@@ -384,7 +384,7 @@ the result with the pose check, as for any rig.
 | `ribbon` (4: bendy arm/leg segments, 5 joints each) | per segment a degree-3×1 NURBS strip whose 5 CV columns ride on matrices (start, ¼, bend control, ¾, end); `uvPin` joints at fixed u; bend controls; twist "from parent" | **exact by weights**: a point at fixed (u, v) on that strip is a fixed weighted sum of the 5 column positions (B-spline basis, computed once in Maya), and so is the tangent; the joint frame is rebuilt from position + tangent + width vector. Same idea as the spline IK's weighted CVs | T0–T1 |
 | `spline` (2: spine `spine` mode, neck `chain` mode) | joints ride on a hidden ribbon (`uvPin`); a hidden spline-IK "length chain" spaces them by arc length (stretch 0 keeps lengths); IK + FK controls; neck: `ikFk`, **wave** (sine of time × speed on the FK controls) | ribbon by weights (as above); arc-length spacing with Kotsudo's spline fit (Fit Chain on Spline, ≈ 0.05 cm on V06) or a measured length table; wave from the sequence time and a sine node | T1 |
 
-Soft IK / stretch / pin, as Jeffy computes them (`ikfk_limb._ik_goal`):
+Soft IK / stretch / pin, as the toolkit computes them (`ikfk_limb._ik_goal`):
 
 ```
 D   = distance(start, IK end) / rig scale
@@ -401,7 +401,7 @@ bone lengths = [upper*upperLength, lower*lowerLength] * f, then
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **J0** Read Jeffy | `jeffy_reader.py` (Maya): setups → module list (type, slots, options, anchors, controls, outputs); root from `rig_base`'s slot (`Root`); duplicate short names handled (mesh `Head` vs joint `Head`); controls taken from the setups (and Maya controller tags); manifest records `source_rig: jeffy`. Tool: Jeffy setups listed in the Modules tab | V010 exports an FBX and a manifest listing all 35 setups and their controls; the Maya tests still pass on V06 |
+| **J0** Read the setups | `setup_reader.py` (Maya): setups → module list (type, slots, options, anchors, controls, outputs); root from `rig_base`'s slot (`Root`); duplicate short names handled (mesh `Head` vs joint `Head`); controls taken from the setups (and Maya controller tags); manifest records `source_rig: setup`. Tool: setups listed in the Modules tab | V010 exports an FBX and a manifest listing all 35 setups and their controls; the Maya tests still pass on V06 |
 | **J1** Skeleton + baked clips | V010 skeleton in Unreal; clip export and the measuring stick on V010 | `run_anim_import.py` on a V010 clip: T0/T1 as on V06 |
 | **J2** FK, spaces, wires, base | `fk_chain` (+ `length`), matrix spaces (parent / orient / point, enum), `rig_base` (+ `globalScale`), `wire_attribute` | pose check: petals, eyes, eyelids, toes, face sliders within T1 |
 | **J3** IK/FK limbs | soft IK, stretch, pin, lengths, `ikFk`, pole and twist, limb spaces | 4 limbs within T1 on all probes (including the new attributes) |
@@ -426,18 +426,18 @@ space enums), and a time for the wave (probes at several times).
   is not within T1, export a length table measured in Maya.
 * **Time in Control Rig** for the wave (absolute sequence time vs delta
   time) — to verify in 5.6.
-* **Auto-snap**: Jeffy's IK/FK snapping runs from a Maya callback; it is an
+* **Auto-snap**: the toolkit's IK/FK snapping runs from a Maya callback; it is an
   animator tool, not rig behaviour, and is not transferred.
-* **Jeffy changes**: the reader depends on Jeffy's metadata. Its
-  `jeffySetupVersion` is recorded; a version Kotsudo doesn't know is
+* **Toolkit changes**: the reader depends on the toolkit's metadata. Its
+  `setupSetupVersion` is recorded; a version Kotsudo doesn't know is
   reported, not guessed.
 
-## 6. Why read Jeffy's description instead of the node graph
+## 6. Why read the toolkit's description instead of the node graph
 
 A generic translator of the whole matrix graph (890 nodes, ribbons on NURBS
 surfaces, IK handles) would be far larger, and still blind to intent (which
-control is the animator's, which enum is a space). Jeffy already states the
+control is the animator's, which enum is a space). The toolkit already states the
 intent, and its code documents the maths. Kotsudo's rule stays the same:
 **the tool declares meaning; values are measured from the scene; the
-result is checked by behaviour** (pose check). A rig without Jeffy
+result is checked by behaviour** (pose check). A rig without such a toolkit
 metadata still goes through the tag reader as before.

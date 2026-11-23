@@ -22,7 +22,7 @@ Clips (frames 0-48 at the scene rate):
 Only time-based curves are touched: the rig's driven keys stay as they are.
 
 The same clips exist for Murakami V06 (tagged rig) and V010 (built with the
-Jeffy toolkit): :data:`CASTS` names, per rig, the controls each clip keys.
+rigging toolkit): :data:`CASTS` names, per rig, the controls each clip keys.
 """
 
 import random
@@ -54,7 +54,7 @@ CASTS = {
         "slider": ("Head_Settings_Ctrl", "Petal_Rotation"),
         "neck": "neck_ctrl_01",
     },
-    "jeffy": {      # Murakami V010
+    "setup_rig": {      # Murakami V010
         "fk_limbs": ["{}_{}Leaf{}FK_CTL".format(s, part, i) for s in "LR" for part in ("Arm", "Leg") for i in (1, 2, 3)],
         "fk_body": ["C_Spine6FK_CTL", "C_Spine8FK_CTL", "C_HeadFK_CTL", "C_spineFK3_CTL", "C_spineFK1_CTL"],
         "arm_ik": ["L_ArmLeaf1IK_CTL", "R_ArmLeaf1IK_CTL"],
@@ -76,9 +76,9 @@ _TRANSLATE = ("translateX", "translateY", "translateZ")
 def rig_cast():
     """The :data:`CASTS` entry of the open rig."""
     try:
-        import jeffy_reader
-        if jeffy_reader.is_jeffy_rig():
-            return CASTS["jeffy"]
+        import setup_reader
+        if setup_reader.is_setup_rig():
+            return CASTS["setup_rig"]
     except ImportError:
         pass
     return CASTS["v06"]

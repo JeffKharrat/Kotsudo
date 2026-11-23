@@ -257,7 +257,7 @@ class RigContext:
             key = self._space_target_key(target)
             weight = target.get("weight") or {"value": 1.0}
             if key is None and blend.get("missing_targets") == "static" and target.get("solo"):
-                # (Jeffy rigs) the target's setup is not rebuilt yet: that
+                # (setup rigs) the target's setup is not rebuilt yet: that
                 # space holds still where Maya puts the control at rest, and
                 # the other spaces keep working.
                 self._warn(f"Space target '{target.get('controller') or target.get('bone')}' of '{name}' "
@@ -287,12 +287,12 @@ class RigContext:
         placement = graph_utils.record_transform(self.hierarchy, record, anchor, label=label)
         # A parent space replaces the whole transform; an orient/point space
         # only half of it, the other half still follows the Maya parent -- or,
-        # on a Jeffy anchor, the FIRST space (attach.py: the blendMatrix input
+        # on a setup anchor, the FIRST space (attach.py: the blendMatrix input
         # is space 0, so a limb's FK root keeps riding on the chest while its
         # orientation follows the chosen space).
         holder = self.world_key()
         if kind != "parent":
-            if blend.get("source") == "jeffy" and parents and parents[0][0] != "world":
+            if blend.get("source") == "setup_rig" and parents and parents[0][0] != "world":
                 holder = parents[0][0]
             else:
                 for parent_name in record.get("parent_controllers") or []:

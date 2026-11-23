@@ -1,4 +1,4 @@
-"""Jeffy's ribbon (J4) and spline (J5) setups in Control Rig.
+"""The toolkit's ribbon (J4) and spline (J5) setups in Control Rig.
 
 Both ride on a NURBS strip in Maya: five (ribbon) or seven (spline) CV
 columns follow matrices, and ``uvPin`` nodes read a frame at a fixed or
@@ -12,10 +12,10 @@ Maya), and so are its tangent and its width direction. Each pin becomes:
     pin       = AimMath(position; tangent axis -> tangent, width axis -> width)
     joint     = (joint_rest . pin_rest^-1) * pin          (joint.world = output.world)
 
-* ``Jeffy.ribbon`` -- the bend controls follow blends of the limb's solved
+* ``Setup.ribbon`` -- the bend controls follow blends of the limb's solved
   bones (their parent null is updated every frame), the columns follow the
   bones, the bend controls and blends of those (``ribbon.py``).
-* ``Jeffy.spline`` -- the columns ride on the IK controls; the joints' U
+* ``Setup.spline`` -- the columns ride on the IK controls; the joints' U
   comes from Maya's spline IK: each joint sits on the curve at CHORD
   distance (its rest bone length, stretched or not) from the previous one.
   A Control Rig spline through the seven column centres gives positions and
@@ -23,8 +23,8 @@ Maya), and so are its tangent and its width direction. Each pin becomes:
   mode (the neck) the result blends with the FK controls by ``ikFk`` and a
   time-driven wave turns the FK zero groups.
 
-The manifest data comes from tools/maya/jeffy_reader.py (``params.ribbon``
-and ``params.jeffy_spline``); docs/jeffy-v010-support.md explains the maths.
+The manifest data comes from tools/maya/setup_reader.py (``params.ribbon``
+and ``params.setup_spline``); docs/setup-rig-v010-support.md explains the maths.
 """
 
 import math
@@ -35,7 +35,7 @@ try:
 except ImportError:
     unreal = cast(Any, None)
 
-from .. import graph_utils, jeffy_math
+from .. import graph_utils, setup_math
 from .rig_module import RigModule
 from . import spline_ik_module
 
@@ -77,17 +77,17 @@ class _Expressions:
             result = graph.get_transform("Bone", str(expr["joint"]))
             correction = self.module._maya_bone_frame(str(expr["joint"]))
             if abs(abs(correction[3]) - 1.0) > 1e-6:
-                result = graph.make_absolute(jeffy_math.transform(correction, [0.0, 0.0, 0.0]), result)
+                result = graph.make_absolute(setup_math.transform(correction, [0.0, 0.0, 0.0]), result)
         elif kind == "control":
             name = self.module.ue_control(expr["name"])
             if name is None:
                 raise RuntimeError(f"control '{expr['name']}' is not in the rig")
             result = graph.get_control(name)
-            # Jeffy's expressions use the Maya control's axes; the Unreal
+            # The toolkit's expressions use the Maya control's axes; the Unreal
             # control is bone-aligned, so turn its frame back to Maya's.
             correction = self.module._maya_to_ue_frame(self.recipe_data, expr["name"], name)
             if abs(abs(correction[3]) - 1.0) > 1e-6:
-                result = graph.make_absolute(jeffy_math.transform(correction, [0.0, 0.0, 0.0]), result)
+                result = graph.make_absolute(setup_math.transform(correction, [0.0, 0.0, 0.0]), result)
         elif kind == "lerp":
             a, b = self.pin(expr["a"]), self.pin(expr["b"])
             t = float(expr.get("t", 0.5))
@@ -114,7 +114,7 @@ class _Expressions:
         return result
 
 
-class _JeffyBase(RigModule):
+class _SetupBase(RigModule):
     """Shared: records, control names, pin frames."""
 
     @classmethod
@@ -167,25 +167,25 @@ class _JeffyBase(RigModule):
 
     def joint_offset(self, bone, pin_rest):
         """Constant: joint_rest then pin_rest^-1, so offset * pin puts the bone on its pin."""
-        rest = jeffy_math.plain(self.context.hierarchy.get_global_transform(
+        rest = setup_math.plain(self.context.hierarchy.get_global_transform(
             graph_utils.make_key(unreal.RigElementType.BONE, bone), True))
-        pin = jeffy_math.plain_pose(pin_rest)
+        pin = setup_math.plain_pose(pin_rest)
         if pin is None:
             raise RuntimeError(f"{bone}: the pin's rest pose is missing")
-        q, t = jeffy_math.compose(rest, jeffy_math.inverse(pin))
-        return jeffy_math.transform(q, t)
+        q, t = setup_math.compose(rest, setup_math.inverse(pin))
+        return setup_math.transform(q, t)
 
 
     def _maya_bone_frame(self, bone):
         """Quaternion (xyzw) from the Unreal bone's rest axes to the Maya
-        joint's (the frame Jeffy's offsets and half-width vectors use);
+        joint's (the frame the toolkit's offsets and half-width vectors use);
         identity when the manifest has no rest pose for the joint."""
         state = (getattr(self.context, "maya_rest_pose", None) or {}).get(bone.split("|")[-1])
         key = graph_utils.make_key(unreal.RigElementType.BONE, bone)
         if not state or not state.get("q") or not self.context.hierarchy.contains(key):
             return [0.0, 0.0, 0.0, 1.0]
         ue = graph_utils.get_transform_rotation(self.context.hierarchy.get_global_transform(key, True))
-        return jeffy_math.q_mul(jeffy_math.q_inverse([ue.x, ue.y, ue.z, ue.w]), [float(c) for c in state["q"]])
+        return setup_math.q_mul(setup_math.q_inverse([ue.x, ue.y, ue.z, ue.w]), [float(c) for c in state["q"]])
 
     def _maya_to_ue_frame(self, recipe_data, maya_name, ue_name):
         """Quaternion (xyzw) taking a vector from the Maya control's axes to
@@ -197,11 +197,11 @@ class _JeffyBase(RigModule):
             self.context._warn(f"{self.name}: no Maya axes for '{maya_name}'; its offsets are used as they are.")
             return [0.0, 0.0, 0.0, 1.0]
         ue = graph_utils.get_transform_rotation(self.context.hierarchy.get_global_transform(key, True))
-        return jeffy_math.q_mul(jeffy_math.q_inverse([ue.x, ue.y, ue.z, ue.w]), [maya.x, maya.y, maya.z, maya.w])
+        return setup_math.q_mul(setup_math.q_inverse([ue.x, ue.y, ue.z, ue.w]), [maya.x, maya.y, maya.z, maya.w])
 
 
-class JeffyRibbonModule(_JeffyBase):
-    module_type = "Jeffy.ribbon"
+class SetupRibbonModule(_SetupBase):
+    module_type = "Setup.ribbon"
     solve_stage = "helpers"      # reads the limb's solved bones
 
     def read_recipe(self):
@@ -217,9 +217,9 @@ class JeffyRibbonModule(_JeffyBase):
         if not ribbon.get("segments"):
             raise RuntimeError("the manifest carries no ribbon description (re-export from Maya)")
         if self.logger:
-            self.logger.push(f"[JeffyRibbon] Building {self.name}")
+            self.logger.push(f"[SetupRibbon] Building {self.name}")
         prefix = graph_utils.sanitize_name(self.name)
-        graph = jeffy_math.Graph(self.context, f"{prefix}_Rb")
+        graph = setup_math.Graph(self.context, f"{prefix}_Rb")
         expressions = _Expressions(self, graph, recipe_data)
         hierarchy, hc = self.context.hierarchy, self.context.hierarchy_controller
         self.context.claim_module_column(width=1400)
@@ -232,7 +232,7 @@ class JeffyRibbonModule(_JeffyBase):
         for key in sorted(ribbon.get("controls") or {}, key=lambda k: (not k.startswith("joint"), k)):
             entry = ribbon["controls"][key]
             record = self.record_named(recipe_data, entry["name"])
-            rest = jeffy_math.pose_transform(entry.get("rest"))
+            rest = setup_math.pose_transform(entry.get("rest"))
             if record is None or rest is None:
                 self.context._warn(f"{self.name}: bend control '{entry['name']}' has no record or rest; skipped.")
                 continue
@@ -267,7 +267,7 @@ class JeffyRibbonModule(_JeffyBase):
         # 3. bendyVis on the limb's settings control shows / hides the bend controls.
         self._visibility(graph, ribbon, controls)
         if self.logger:
-            self.logger.log(f"[JeffyRibbon] {self.name}: {nodes} ribbon joint(s) on {len(ribbon['segments'])} "
+            self.logger.log(f"[SetupRibbon] {self.name}: {nodes} ribbon joint(s) on {len(ribbon['segments'])} "
                             f"segment(s), {len(controls)} bend control(s), {len(graph.nodes)} node(s).")
             self.logger.pop()
         return self.build_result(controls=controls, nodes=graph.nodes,
@@ -276,7 +276,7 @@ class JeffyRibbonModule(_JeffyBase):
 
     def _visibility(self, graph, ribbon, controls):
         holder, attribute = ribbon.get("settings_control"), ribbon.get("visibility_attr")
-        unit = jeffy_math.unit("SetControlVisibility")
+        unit = setup_math.unit("SetControlVisibility")
         if not (holder and attribute and controls and unit):
             return
         try:
@@ -293,13 +293,13 @@ class JeffyRibbonModule(_JeffyBase):
             self.context._warn(f"{self.name}: bendyVis not wired ({exc}).")
 
 
-class JeffySplineModule(_JeffyBase):
-    module_type = "Jeffy.spline"
+class SetupSplineModule(_SetupBase):
+    module_type = "Setup.spline"
 
     def read_recipe(self):
         return self.resolve_recipe_fields(
             {"Spline": None, "Switch": None, "ControllerRecords": None, "ShapeTable": None, "ControlScale": 1.0},
-            fallback_names={"Spline": ["jeffy_spline"], "Switch": ["switch"], "ControllerRecords": ["controller_records"],
+            fallback_names={"Spline": ["setup_spline"], "Switch": ["switch"], "ControllerRecords": ["controller_records"],
                             "ShapeTable": ["shape_table"], "ControlScale": ["control_scale"]})
 
     def build(self):
@@ -309,9 +309,9 @@ class JeffySplineModule(_JeffyBase):
         if not spline.get("pins"):
             raise RuntimeError("the manifest carries no spline description (re-export from Maya)")
         if self.logger:
-            self.logger.push(f"[JeffySpline] Building {self.name}")
+            self.logger.push(f"[SetupSpline] Building {self.name}")
         prefix = graph_utils.sanitize_name(self.name)
-        graph = jeffy_math.Graph(self.context, f"{prefix}_Sp")
+        graph = setup_math.Graph(self.context, f"{prefix}_Sp")
         hierarchy, hc = self.context.hierarchy, self.context.hierarchy_controller
         self.context.claim_module_column(width=1600)
         scale = graph_utils.compute_chain_scale(hierarchy, self.chain, fraction=0.3)
@@ -327,7 +327,7 @@ class JeffySplineModule(_JeffyBase):
             resolved = self.context.resolve_control_parent(record, parent_key)
             parent = resolved
             if record.get("name") in wave_zero:
-                rest = jeffy_math.pose_transform(wave_zero[record["name"]]["zero_rest"])
+                rest = setup_math.pose_transform(wave_zero[record["name"]]["zero_rest"])
                 null = graph_utils.create_follow_null(hierarchy, hc, f"RB_{graph_utils.sanitize_name(record['name'])}_Wave",
                                                       rest, resolved) if rest else None
                 if null:
@@ -364,7 +364,7 @@ class JeffySplineModule(_JeffyBase):
         points = []
         for column in spline["columns"]:
             owner = owners[int(column["owner"])]
-            local = jeffy_math.q_rotate(to_ue[int(column["owner"])], column["local"])
+            local = setup_math.q_rotate(to_ue[int(column["owner"])], column["local"])
             if max(abs(c) for c in local) < 1e-9:
                 points.append(f"{owner}.Translation")
             else:
@@ -378,7 +378,7 @@ class JeffySplineModule(_JeffyBase):
         if not (from_points and position_unit and length_unit):
             raise RuntimeError("the Control Rig Spline nodes are not available (enable the ControlRigSpline plugin)")
         halves = [graph.rotate_vector(f"{owners[int(c['owner'])]}.Rotation",
-                                      jeffy_math.q_rotate(to_ue[int(c["owner"])], h))
+                                      setup_math.q_rotate(to_ue[int(c["owner"])], h))
                   for c, h in zip(spline["columns"], spline.get("cv_half") or [])]
 
         def make_spline(name, point_pins):
@@ -475,7 +475,7 @@ class JeffySplineModule(_JeffyBase):
             # Constant offset measured after the compile (builder's rest bake):
             # Control Rig's spline stops just short of its ends (KINDA_SMALL_NUMBER
             # on U, 0.076 cm on the V010 torso) and its tangent is sampled.
-            ik_pose = graph.make_absolute(jeffy_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), ik_pose)
+            ik_pose = graph.make_absolute(setup_math.transform([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]), ik_pose)
             rest_corrections.append((bone, ik_pose.rsplit(".", 1)[0]))
             final = ik_pose
             if chain_mode and bone in fk_pins:
@@ -485,7 +485,7 @@ class JeffySplineModule(_JeffyBase):
         if chain_mode and switch is not None:
             self._mode_visibility(graph, switch, spline, ik_names)
         if self.logger:
-            self.logger.log(f"[JeffySpline] {self.name} ({spline.get('mode')}): {len(pins)} joint(s) on a "
+            self.logger.log(f"[SetupSpline] {self.name} ({spline.get('mode')}): {len(pins)} joint(s) on a "
                             f"{len(points)}-point spline, {len(controls)} control(s), chord walk x{CHORD_ITERATIONS}, "
                             f"{len(graph.nodes)} node(s).")
             self.logger.pop()
@@ -501,7 +501,7 @@ class JeffySplineModule(_JeffyBase):
         points = []
         for column in columns:
             owner = int(column["owner"])
-            at = owners_rest[owner].transform_location(unreal.Vector(*jeffy_math.q_rotate(to_ue[owner], column["local"])))
+            at = owners_rest[owner].transform_location(unreal.Vector(*setup_math.q_rotate(to_ue[owner], column["local"])))
             points.append((at.x, at.y, at.z))
         last = len(points) - 1
         if last < 3:
@@ -534,7 +534,7 @@ class JeffySplineModule(_JeffyBase):
     def _mode_visibility(self, graph, switch, spline, ik_names):
         """As Maya's two conditions: the FK controls show while ikFk < 1, the
         IK controls while ikFk > 0 (both sets show during a blend)."""
-        if jeffy_math.unit("SetControlVisibility") is None:
+        if setup_math.unit("SetControlVisibility") is None:
             self.context._warn(f"{self.name}: no Set Control Visibility node; the IK/FK controls stay visible.")
             return
         fk_names = [n for n in (self.ue_control(c) for c in spline.get("fk_controls") or []) if n]
@@ -567,7 +567,7 @@ class JeffySplineModule(_JeffyBase):
                                f"{wave.get('time_frames', 0)} (waveSpeed does not animate it).")
             time = float(wave.get("time_frames") or 0.0)
         moving = graph.mul(time, speed)
-        sine_unit = jeffy_math.unit("MathFloatSin")
+        sine_unit = setup_math.unit("MathFloatSin")
         axis = list(wave.get("axis_unreal") or [0.0, 1.0, 0.0])
         for null, entry in nulls:
             fraction = float(entry.get("fraction") or 0.0)
@@ -582,4 +582,4 @@ class JeffySplineModule(_JeffyBase):
             rest_local = graph.get_transform("Null", null, initial=True, local=True)
             graph.set_transform("Null", null, graph.make_absolute(pre, rest_local), local=True)
         if self.logger:
-            self.logger.log(f"[JeffySpline] {self.name}: wave on {len(nulls)} FK control(s).")
+            self.logger.log(f"[SetupSpline] {self.name}: wave on {len(nulls)} FK control(s).")

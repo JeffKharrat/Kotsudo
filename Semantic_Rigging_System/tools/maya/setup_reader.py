@@ -1,32 +1,34 @@
-"""Read a rig built with the Jeffy toolkit (Jeff Inventory) into Kotsudo terms.
+"""Read a setup rig (a matrix rig whose setups describe themselves) into
+Kotsudo terms.
 
-Jeffy (https://github.com/JeffKharrat/Jeffy-Toolkit) describes every setup it
-builds on a ``network`` node (a *tag*, ``<side>_<name>_SETUP``):
+The rigging toolkit that built the rig describes every setup on a
+``network`` node (a *tag*, ``<side>_<name>_SETUP``):
 
-* ``jeffySetupType`` / ``jeffySetupName`` / ``jeffySetupSide`` /
-  ``jeffySetupVersion``;
-* JSON strings ``jeffy_options``, ``jeffy_slots`` (the joints it was built
-  on), ``jeffy_anchors`` (spaces: kind, roles, enum attribute, rest matrix),
-  ``jeffy_rest`` (rest channels of the driven joints);
-* message lists ``jeffyMsg_<key>``: ``controls``, ``outputs``, ``driven``...
+* its type, name, side and version;
+* JSON strings: its options, its slots (the joints it was built on), its
+  anchors (spaces: kind, roles, enum attribute, rest matrix) and its rest
+  (rest channels of the driven joints);
+* message lists: ``controls``, ``outputs``, ``driven``...
 
 Every bind joint copies the world matrix of one **output** transform
-(``joint.world = output.world``; output -> joint link: ``output.jeffyJoint``).
-Controls carry ``jeffyKey`` (``fk0``, ``ik``, ``pole``, ``settings``...) and
-optionally ``jeffySpaceRole`` (``cog``, ``chest``...).
+(``joint.world = output.world``; each output links to its joint). Controls
+carry a key (``fk0``, ``ik``, ``pole``, ``settings``...) and optionally a
+space role (``cog``, ``chest``...). The exact attribute names are the
+scene's own: see :data:`_SCENE_PREFIX` below.
 
-This module only reads (it never imports Jeffy, which needs not be
-installed). It gives the exporter:
+This module only reads (the toolkit needs not be installed). It gives the
+exporter:
 
 * :func:`root_joint` -- the skeleton root the ``rig_base`` setup declares;
 * :func:`read_setups` -- every setup with its controls and outputs;
 * :func:`modules_config` -- one Kotsudo module per setup that drives joints
-  (``module_type`` = ``Jeffy.<setup type>``, chain = driven joints in output
+  (``module_type`` = ``Setup.<setup type>``, chain = driven joints in output
   order), for the exporter, the tool and the pose / animation checks;
-* :func:`manifest_section` -- the ``jeffy`` block of the manifest (setups,
-  options, spaces, control records with Kotsudo controller snapshots).
+* :func:`manifest_section` -- the ``setup_rig`` block of the manifest
+  (setups, options, spaces, control records with Kotsudo controller
+  snapshots).
 
-See docs/jeffy-v010-support.md.
+See docs/setup-rig-v010-support.md.
 """
 
 import json
@@ -34,15 +36,24 @@ import math
 
 import maya.cmds as cmds
 
-TYPE_ATTR = "jeffySetupType"
-KEY_ATTR = "jeffyKey"
-ROLE_ATTR = "jeffySpaceRole"
-REST_ATTR = "jeffyRest"
-OUTPUT_JOINT_ATTR = "jeffyJoint"
-MODULE_PREFIX = "Jeffy."
+# The attribute names in the Maya scene, written by the rigging toolkit that
+# built the rig. They must match the Maya file exactly, so this prefix is the
+# one place the toolkit's name appears in the project.
+_SCENE_PREFIX = "jeffy"
+TYPE_ATTR = _SCENE_PREFIX + "SetupType"
+NAME_ATTR = _SCENE_PREFIX + "SetupName"
+SIDE_ATTR = _SCENE_PREFIX + "SetupSide"
+VERSION_ATTR = _SCENE_PREFIX + "SetupVersion"
+KEY_ATTR = _SCENE_PREFIX + "Key"
+ROLE_ATTR = _SCENE_PREFIX + "SpaceRole"
+REST_ATTR = _SCENE_PREFIX + "Rest"
+OUTPUT_JOINT_ATTR = _SCENE_PREFIX + "Joint"
+JSON_ATTR_PREFIX = _SCENE_PREFIX + "_"        # + options / slots / anchors / rest
+MESSAGE_ATTR_PREFIX = _SCENE_PREFIX + "Msg_"  # + controls / outputs / driven ...
+MODULE_PREFIX = "Setup."
 #: setup versions this reader was written against (others are read, and reported)
 KNOWN_VERSIONS = {1}
-#: Jeffy setup types the Unreal builder rebuilds (J2-J5). Their controls are
+#: setup types the Unreal builder rebuilds (J2-J5). Their controls are
 #: described as standard Kotsudo controller records (``bone_controllers``:
 #: parents, spaces, driven groups); ``wire_attribute`` goes through the
 #: blendshape export. The limb, ribbon and spline maths the records cannot
@@ -53,7 +64,7 @@ DESCRIBED_TYPES = ("fk_chain", "rig_base", "ikfk_limb", "ribbon", "spline")
 #: (1 = IK, 0 = FK; measured on V010: at 0 only the FK controls move the joints)
 SWITCH_ATTR = "ikFk"
 SWITCH_IK_VALUE, SWITCH_FK_VALUE = 1.0, 0.0
-#: Kotsudo roles of the Jeffy control keys that drive no joint directly
+#: Kotsudo roles of the setup control keys that drive no joint directly
 #: (the pose check puts the IK ones in IK mode: export_test_poses._IK_ROLES).
 KEY_ROLES = {"ik": "ik_effector", "pole": "pole_vector", "settings": "settings",
              "cog": "cog", "hips": "hips", "hipsIk": "ik_control", "chestIk": "ik_control", "head": "head"}
@@ -86,7 +97,7 @@ def _string(node, attr, default=None):
 
 
 def _json(node, attr, default=None):
-    text = _string(node, "jeffy_" + attr)
+    text = _string(node, JSON_ATTR_PREFIX + attr)
     if not text:
         return default
     try:
@@ -96,8 +107,8 @@ def _json(node, attr, default=None):
 
 
 def _messages(node, key, keep_empty=False):
-    """Long names of a ``jeffyMsg_<key>`` message list, in index order."""
-    attr = "jeffyMsg_" + key
+    """Long names of a setup's ``<key>`` message list, in index order."""
+    attr = MESSAGE_ATTR_PREFIX + key
     if not cmds.attributeQuery(attr, node=node, exists=True):
         return []
     plug = "{}.{}".format(node, attr)
@@ -121,12 +132,12 @@ def _messages(node, key, keep_empty=False):
 # ---------------------------------------------------------------------------
 
 def setup_nodes():
-    """Every Jeffy setup tag in the scene, sorted by name."""
+    """Every setup tag in the scene, sorted by name."""
     return sorted(n for n in cmds.ls(type="network") or []
                   if cmds.attributeQuery(TYPE_ATTR, node=n, exists=True))
 
 
-def is_jeffy_rig():
+def is_setup_rig():
     return bool(setup_nodes())
 
 
@@ -159,12 +170,12 @@ def read_setup(tag):
         entry["control"] = anchor_controls[index] if (definition.get("attr") and index < len(anchor_controls)) \
             else None
         anchors.append(entry)
-    version = _string(tag, "jeffySetupVersion")
+    version = _string(tag, VERSION_ATTR)
     return {
         "tag": tag,
         "type": _string(tag, TYPE_ATTR),
-        "name": _string(tag, "jeffySetupName"),
-        "side": _string(tag, "jeffySetupSide"),
+        "name": _string(tag, NAME_ATTR),
+        "side": _string(tag, SIDE_ATTR),
         "version": version,
         "known_version": version in KNOWN_VERSIONS,
         "options": _json(tag, "options", {}) or {},
@@ -220,10 +231,10 @@ def driven_chain(setup):
 
 
 def modules_config(setups=None, describe=True):
-    """Kotsudo modules: one per Jeffy setup that drives bind joints.
+    """Kotsudo modules: one per setup that drives bind joints.
 
     Setups that drive no joint (``wire_attribute``: attribute -> attribute)
-    stay in the manifest's ``jeffy`` section only. With ``describe`` the
+    stay in the manifest's ``setup_rig`` section only. With ``describe`` the
     limb / ribbon / spline maths the Unreal builder needs is measured from
     the scene into ``params`` (slow on a big rig; the tool's listing skips it).
     """
@@ -235,15 +246,15 @@ def modules_config(setups=None, describe=True):
         if not chain:
             continue
         joints = [joint for joint, _ in chain]
-        params = {"jeffy": {"type": setup["type"], "tag": setup["tag"], "version": setup["version"],
+        params = {"setup_rig": {"type": setup["type"], "tag": setup["tag"], "version": setup["version"],
                             "options": setup["options"]}}
         params.update(_switch_params(setup, joints, index))
         if describe:
             try:
                 params.update(_setup_params(setup, joints, index))
             except Exception as exc:
-                params.setdefault("jeffy", {})["describe_error"] = str(exc)
-                print("[Jeffy] {}: could not describe the setup for Unreal ({})".format(setup["tag"], exc))
+                params.setdefault("setup_rig", {})["describe_error"] = str(exc)
+                print("[SetupReader] {}: could not describe the setup for Unreal ({})".format(setup["tag"], exc))
         modules.append({
             "module_type": MODULE_PREFIX + str(setup["type"]),
             "module_name": module_name(setup),
@@ -251,8 +262,8 @@ def modules_config(setups=None, describe=True):
             "chain_items": [{"bone_name": joint, "role": output.get("key") or ""} for joint, output in chain],
             "start_bone": joints[0],
             "end_bone": joints[-1],
-            "source": "jeffy",
-            "jeffy_tag": setup["tag"],
+            "source": "setup_rig",
+            "setup_tag": setup["tag"],
             "params": params,
         })
     return modules
@@ -326,7 +337,7 @@ def _matrix_sources(plug):
 
 
 def _source_control(node, index, depth=0):
-    """The Jeffy control whose world matrix places ``node`` (an output),
+    """The setup control whose world matrix places ``node`` (an output),
     through multMatrix nodes and offsetParentMatrix inputs, or None."""
     if depth > 12:
         return None
@@ -349,7 +360,7 @@ def _source_control(node, index, depth=0):
 
 def _record_role(setup, control, index):
     """(Kotsudo role, driven bone): a control that places an output drives
-    that output's joint ('bone_driver'); the others keep their Jeffy key.
+    that output's joint ('bone_driver'); the others keep their setup key.
 
     Blended setups (``ikfk_limb``, ``spline`` in chain mode) put a
     blendMatrix between the FK control and the output, so their FK controls
@@ -422,7 +433,7 @@ def _space_blend(control_node, anchor, index):
                                            "true": 1.0, "false": 0.0}]}})
         targets.append(target)
     blend = {"kind": anchor.get("kind") or "parent", "group": _short(anchor.get("zero")),
-             "constraint": _short(choice), "targets": targets, "source": "jeffy",
+             "constraint": _short(choice), "targets": targets, "source": "setup_rig",
              # A target whose setup is not rebuilt yet holds its space still.
              "missing_targets": "static",
              "rest": erm._world_pose_unreal(control_node)}
@@ -482,13 +493,13 @@ def _compose_group_entry(group, compose):
 
 
 def _describe_hierarchy(record, node, index):
-    """Fill what the generic snapshot cannot see through Jeffy's matrix
+    """Fill what the generic snapshot cannot see through the toolkit's matrix
     groups: the parent controllers, the space switch and the groups."""
     ancestors, current = [], _parent(node)
     while current:
         ancestors.append(current)
         current = _parent(current)
-    # Parent controllers: the Jeffy controls above, up to a space group (a
+    # Parent controllers: the setup controls above, up to a space group (a
     # space replaces everything above it).
     parents = []
     space_group = None
@@ -579,15 +590,15 @@ def _clean_attributes(record, setup):
                 continue
         except Exception:
             pass
-        if name == SWITCH_ATTR and (record.get("jeffy_key") != "settings"):
+        if name == SWITCH_ATTR and (record.get("setup_key") != "settings"):
             continue
         kept.append(info)
     record["attributes"] = kept
 
 
 def control_record(setup, control, index):
-    """A Kotsudo controller record for one Jeffy control (the snapshot the
-    exporter makes for any controller, plus Jeffy's key, space role and
+    """A Kotsudo controller record for one setup control (the snapshot the
+    exporter makes for any controller, plus the toolkit's key, space role and
     setup; for the described types, also parents, spaces and groups)."""
     import export_rig_manifest as erm
 
@@ -598,8 +609,8 @@ def control_record(setup, control, index):
                     else (control.get("key") or "control", None))
     snapshot = erm._query_transform_snapshot(node, role, name, driven or anchor, driven or anchor)
     record = dict(snapshot or {"name": control["name"], "dag_path": node})
-    record.update({"jeffy_key": control.get("key"), "jeffy_space_role": control.get("space_role"),
-                   "jeffy_setup": name, "anchor_bone": _short(driven or anchor) if (driven or anchor) else None})
+    record.update({"setup_key": control.get("key"), "setup_space_role": control.get("space_role"),
+                   "setup_name": name, "anchor_bone": _short(driven or anchor) if (driven or anchor) else None})
     _clean_attributes(record, setup)
     if setup["type"] in DESCRIBED_TYPES:
         _describe_hierarchy(record, node, index)
@@ -612,7 +623,7 @@ FROZEN_WAVE_ATTRIBUTE = "waveSpeed"
 
 
 def transferred_attributes(manifest):
-    """{(control, attribute): note} of the control attributes the Jeffy
+    """{(control, attribute): note} of the control attributes the setup
     modules rebuild in Unreal (limb lengths / softness / stretch / pin /
     twist, spline stretch and wave, ribbon visibility, globalScale). The
     note is None when fully rebuilt, else what differs."""
@@ -621,12 +632,12 @@ def transferred_attributes(manifest):
         module_type = module.get("module_type") or ""
         params = module.get("params") or {}
         limb = params.get("limb") or {}
-        if module_type == "Jeffy.ikfk_limb" and limb.get("ik_control"):
+        if module_type == "Setup.ikfk_limb" and limb.get("ik_control"):
             for attribute in (limb.get("attributes") or {}).values():
                 if attribute:
                     handled[(limb["ik_control"], attribute)] = None
-        spline = params.get("jeffy_spline") or {}
-        if module_type == "Jeffy.spline":
+        spline = params.get("setup_spline") or {}
+        if module_type == "Setup.spline":
             if spline.get("stretch"):
                 handled[(spline["stretch"]["control"], spline["stretch"]["attr"])] = None
             wave = spline.get("wave") or {}
@@ -637,11 +648,11 @@ def transferred_attributes(manifest):
                     "Control Rig has no absolute-time node: the wave is rebuilt frozen at the exported frame, "
                     "so waveSpeed does not animate it in Unreal")
         ribbon = params.get("ribbon") or {}
-        if module_type == "Jeffy.ribbon" and ribbon.get("settings_control") and ribbon.get("visibility_attr"):
+        if module_type == "Setup.ribbon" and ribbon.get("settings_control") and ribbon.get("visibility_attr"):
             handled[(ribbon["settings_control"], ribbon["visibility_attr"])] = None
     for records in (manifest.get("bone_controllers") or {}).values():
         for record in records:
-            if not record.get("jeffy_setup"):
+            if not record.get("setup_name"):
                 continue
             for info in record.get("attributes") or []:
                 if info.get("name") == "globalScale":
@@ -654,16 +665,16 @@ MATRIX_GROUP_PROBLEM = "placed by a matrix network (offsetParentMatrix)"
 
 def _mark_module_placed(record, setup):
     """Offset groups whose matrix network the Unreal modules rebuild are no
-    problem: a ribbon's bend groups follow the strip (Jeffy.ribbon follow
-    nulls), a spline chain's FK zeros carry the wave (Jeffy.spline wave
+    problem: a ribbon's bend groups follow the strip (Setup.ribbon follow
+    nulls), a spline chain's FK zeros carry the wave (Setup.spline wave
     nulls) and a top group that follows one node is its space bone or
     controller. They become kind ``module`` with what places them."""
     role = record.get("role")
     placed_by = None
     if setup["type"] == "ribbon" and role in ("bend", "bend_joint"):
-        placed_by = "Jeffy.ribbon (follows the strip)"
+        placed_by = "Setup.ribbon (follows the strip)"
     elif setup["type"] == "spline" and role == "bone_driver":
-        placed_by = "Jeffy.spline (wave)"
+        placed_by = "Setup.spline (wave)"
     follow = record.get("parent_space_bone") if not record.get("parent_space_blend") else None
     first = True
     for entry in record.get("offset_stack") or []:
@@ -682,11 +693,11 @@ def _mark_module_placed(record, setup):
 
 
 def bone_controller_entries(module, setups=None):
-    """[(bone, controller record)] of a Jeffy module of a described type,
+    """[(bone, controller record)] of a setup module of a described type,
     for the manifest's ``bone_controllers`` (keyed by the bone each control
     drives, else the module's first bone)."""
     setups = read_setups() if setups is None else setups
-    setup = next((s for s in setups if s["tag"] == module.get("jeffy_tag")), None)
+    setup = next((s for s in setups if s["tag"] == module.get("setup_tag")), None)
     if setup is None or setup["type"] not in DESCRIBED_TYPES:
         return []
     index = _Index(setups)
@@ -744,7 +755,7 @@ def _ribbon_base_chain(setup):
 # ---------------------------------------------------------------------------
 # Setup maths for the Unreal builder (J3-J5): what the controller records
 # cannot carry. Everything is MEASURED from the scene (rest matrices, basis
-# weights, lengths), the formulas come from Jeffy's own code
+# weights, lengths), the formulas come from the toolkit's own code
 # (setups/tools/ikfk_limb.py, ribbon.py, spline.py).
 # ---------------------------------------------------------------------------
 
@@ -872,7 +883,7 @@ def _cv_source(shape, cv_index):
 def _matrix_expr(plug, index, depth=0):
     """The world matrix a plug carries, as an expression the Unreal module
     evaluates: a bone (an output), a control, an aimMatrix or a blendMatrix
-    of two such expressions (what Jeffy's ribbon builds its columns from)."""
+    of two such expressions (what the toolkit's ribbon builds its columns from)."""
     if depth > 6:
         raise ValueError("matrix expression too deep at {}".format(plug))
     node, _, attribute = plug.partition(".")
@@ -1263,7 +1274,7 @@ def _spline_params(setup, joints, index):
                 "controls": wave_controls,
             }
     # ``params.spline`` belongs to Kotsudo's own SplineIK module (schema).
-    return {"jeffy_spline": spline}
+    return {"setup_spline": spline}
 
 
 def _setup_params(setup, joints, index):
@@ -1286,10 +1297,10 @@ def _json_safe(value):
 
 
 def manifest_section(setups=None):
-    """The manifest's ``jeffy`` block: every setup, with control records.
+    """The manifest's ``setup_rig`` block: every setup, with control records.
 
     Each control record is a Kotsudo controller snapshot (origin, offset from
-    its anchor bone in Unreal axes, shape, attributes, locks...) plus Jeffy's
+    its anchor bone in Unreal axes, shape, attributes, locks...) plus the toolkit's
     key, space role and the setup it belongs to, so the pose and animation
     checks find the animator controls as they do on tagged rigs.
     """
@@ -1306,8 +1317,8 @@ def manifest_section(setups=None):
                 record = control_record(setup, control, index)
             except Exception as exc:
                 section["notes"].append("{}: no controller snapshot ({})".format(control["name"], exc))
-                record = {"name": control["name"], "dag_path": control["node"], "jeffy_key": control.get("key"),
-                          "jeffy_setup": name}
+                record = {"name": control["name"], "dag_path": control["node"], "setup_key": control.get("key"),
+                          "setup_name": name}
             controls.append(record)
         section["setups"].append(_json_safe({
             "module_name": name,
@@ -1324,7 +1335,7 @@ def manifest_section(setups=None):
             "controls": controls,
         }))
         if not setup["known_version"]:
-            section["notes"].append("{}: Jeffy setup version {} is newer than this reader knows (1); "
+            section["notes"].append("{}: setup version {} is newer than this reader knows (1); "
                                     "read as version 1".format(name, setup["version"]))
     return section
 
