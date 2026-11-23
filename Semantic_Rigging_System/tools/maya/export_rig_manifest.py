@@ -4896,7 +4896,22 @@ def export_fbx(fbx_path, export_nodes, bake_range=None):
         mel.eval("FBXExportBakeComplexAnimation -v false")
     mel.eval("FBXExportUpAxis y")
     mel.eval("FBXExportFileVersion -v FBX201800")
-    mel.eval('FBXExport -f "{}" -s'.format(fbx_path.replace("\\", "/")))
+    # The FBX time span is the playback range, not the bake range: a 0-20 clip
+    # from a 0-120 timeline imported in Unreal as 121 frames (2026-11-23). So
+    # the playback range is the clip's while the file is written.
+    timeline = None
+    if bake_range:
+        timeline = (cmds.playbackOptions(query=True, minTime=True), cmds.playbackOptions(query=True, maxTime=True),
+                    cmds.playbackOptions(query=True, animationStartTime=True),
+                    cmds.playbackOptions(query=True, animationEndTime=True))
+        cmds.playbackOptions(animationStartTime=bake_range[0], minTime=bake_range[0],
+                             maxTime=bake_range[1], animationEndTime=bake_range[1])
+    try:
+        mel.eval('FBXExport -f "{}" -s'.format(fbx_path.replace("\\", "/")))
+    finally:
+        if timeline:
+            cmds.playbackOptions(animationStartTime=timeline[2], animationEndTime=timeline[3],
+                                 minTime=timeline[0], maxTime=timeline[1])
 
     cmds.select(clear=True)
     print("[RigManifest] FBX exported: {}".format(fbx_path))

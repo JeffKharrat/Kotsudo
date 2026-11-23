@@ -118,7 +118,8 @@ def main():
             suffix = "_local" if preserve else ""
             base = "A_" + fbx_name.replace(".anim.fbx", "").replace(".", "_")
             anim = anim_import.import_baked_clip(os.path.join(folder, fbx_name), skeleton,
-                                                 asset_name=base + suffix, preserve_local_transform=preserve)
+                                                 asset_name=base + suffix, preserve_local_transform=preserve,
+                                                 frame_range=(document["time"]["start"], document["time"]["end"]))
             report_path = clip_path.replace(".anim.json", f".anim_check{suffix}.json")
             mode = "FBX local transforms" if preserve else "Unreal default import"
             report = anim_import.check_anim_sequence(anim, document, manifest, report_path,

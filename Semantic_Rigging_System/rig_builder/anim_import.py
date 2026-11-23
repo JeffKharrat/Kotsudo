@@ -90,7 +90,7 @@ def _set_cvar(name, value):
 
 
 def import_baked_clip(fbx_path, skeleton, destination=ANIM_FOLDER, asset_name=None,
-                      preserve_local_transform=False):
+                      preserve_local_transform=False, frame_range=None):
     """Import ``fbx_path`` as an Anim Sequence on ``skeleton``; returns it.
 
     Uses the classic FBX importer, whose animation-only options Unreal 5.6
@@ -123,6 +123,15 @@ def import_baked_clip(fbx_path, skeleton, destination=ANIM_FOLDER, asset_name=No
         ui.set_editor_property("skeleton", skeleton)
         data = ui.get_editor_property("anim_sequence_import_data")
         data.set_editor_property("animation_length", unreal.FBXAnimationLengthImportType.FBXALIT_EXPORTED_TIME)
+        if frame_range is not None:
+            # Only the clip's frames: an FBX written by an older exporter spans
+            # the whole Maya timeline (a 0-20 clip came in as 121 frames).
+            try:
+                data.set_editor_property("animation_length", unreal.FBXAnimationLengthImportType.FBXALIT_SET_RANGE)
+                data.set_editor_property("frame_import_range", unreal.Int32Interval(
+                    min=int(round(frame_range[0])), max=int(round(frame_range[1]))))
+            except Exception as exc:
+                _warn(f"Could not limit the import to frames {frame_range}: {exc}")
         data.set_editor_property("import_bone_tracks", True)
         for name, value in (("import_custom_attribute", True), ("remove_redundant_keys", False),
                             ("use_default_sample_rate", False),
