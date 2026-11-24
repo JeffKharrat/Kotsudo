@@ -5,8 +5,9 @@ each clip becomes a Level Sequence whose Control Rig track has a locked
 base layer (Maya's control values, per frame) and an additive animator
 layer. Checked on the five V010 clips; the transfer adds nothing beyond the
 rig's own error. It replaces the retake window (route F, phase 1a).
-Details and results: section 15. **Next (2026-11-24):** compare it with a
-lighter FK offset layer and a retake window, section 17.
+Details and results: section 15. **2026-11-24:** compared with a lighter FK
+layer (built, M2) and a retake window (next), section 17; every step is in
+the Kotsudo menu in Unreal.
 
 Earlier status (2026-11-02): **S0 built and tested** (Maya clip export, Animation
 tab, five script-made test clips). **S1 first Unreal run**: the `world`
@@ -480,7 +481,7 @@ Later, at least one clip made by an animator, not by a script.
 |---|---|---|
 | **1a** ✅ Layered workflow (replaces the retake window F) | locked base layer of per-frame control keys (B) + additive animator layer; section 15 | five V010 clips: transfer error ≤ 0.004 cm over the rig's own; layer adds as expected (2026-11-20) |
 | **1a+** ✅ Exact final export | the baked clip + (rig with the layer − rig without it), section 15 | empty layer = the bake (T0); a +10° head edit lands exactly, untouched bones equal the bake (2026-11-20) |
-| **1b** Retake methods compared | full control bake vs FK offset layer vs retake window, section 17 | the section 17 table on three clips |
+| **1b** Retake methods compared | full control bake vs FK layer vs retake window, section 17 | the section 17 table on three clips |
 
 **Axis 2: the animation as keys in the Control Rig**
 
@@ -677,19 +678,19 @@ built (section 15); 2 and 3 are new.
 
 ### The three methods
 
-| | **M1 Full control bake** (built) | **M2 FK offset layer** (lightest) | **M3 Retake window** (in between) |
+| | **M1 Full control bake** (built) | **M2 FK layer** (lightest, built) | **M3 Retake window** (in between) |
 |---|---|---|---|
-| Base | Our Control Rig, keyed on every frame from the sidecar (spot method, settle loop) | The baked Anim Sequence (route A), untouched | The baked Anim Sequence everywhere; our Control Rig keyed from the sidecar **only on the window** (+ ease frames) |
-| Animator edits | Our controls (FK, IK, splines, sliders) on an additive layer | Unreal's stock **FK Control Rig** (one control per bone) on top of the clip, additive | Our controls, inside the window only |
+| Base | Our Control Rig, keyed on every frame from the sidecar (spot method, settle loop) | The bake as keys on one FK control per bone (`CR_<rig>_FK`, generated), read straight from the bones | The baked Anim Sequence everywhere; our Control Rig keyed from the sidecar **only on the window** (+ ease frames) |
+| Animator edits | Our controls (FK, IK, splines, sliders) on an additive layer | The FK controls on an additive layer | Our controls, inside the window only |
 | Needs the sidecar | yes | **no** | yes, window frames only |
 | Spot method runs on | every frame | no frame | window frames only |
 | IK, spaces, switches | yes | **no** (FK on bones only) | yes, in the window |
-| Outside the edit | rig error (≤ 0.5 cm on the arm ribbons), exact after the final export | exact (the bake) | exact (the bake) |
+| Outside the edit | rig error (≤ 0.5 cm on the arm ribbons), exact after the final export | exact after the final export (base 0.012 cm from the bake) | exact (the bake) |
 | Main risk | cost: a key on every frame of every control | an IK-style edit (plant a hand) has to be done by rotating each bone | the jump at the window edges (rig pose vs bake) |
 
-**Why M2 needs no Maya data.** An offset layer doesn't need to know where
-Maya's controls were: every control starts at zero and *adds* to the bone
-the clip already plays. That only works when the control and the bone are
+**Why M2 needs no Maya data.** An FK layer doesn't need to know where
+Maya's controls were: each control *is* its bone, so the base keys are the
+bones' own pose and the animator layer adds to it. That only works when the control and the bone are
 the same thing, which is true for FK (rotate the forearm 10° more). For IK
 an offset layer would have to know where the hand already is to move it from
 there, which is the backwards problem: Unreal's Layered Control Rig solves it
@@ -701,21 +702,44 @@ industry baseline to beat.
 
 ### What gets built
 
-**M2, FK offset layer** (`rig_builder/anim_fk_layer.py`, `run_anim_fk_layer.py`):
+**M2, FK layer** (`rig_builder/anim_fk_layer.py`, `run_anim_fk_layer.py`),
+**built 2026-11-24**:
 
-1. Import the clip's baked FBX (route A, reused from `anim_import`).
-2. Level Sequence `LS_<rig>_<clip>_FK`: an animation track playing the clip,
-   and a Control Rig track with Unreal's FK Control Rig on the same binding,
-   in additive (layered) mode so its zeroed controls add to the clip.
-3. Final export: Sequencer's own bake (`SequencerTools.export_anim_sequence`)
-   to `A_<rig>_<clip>_FK_Final`; the exact-export rule of section 15 also
-   applies (bake + edited − unedited) and is the fallback if Sequencer's bake
-   is not exact.
+1. `CR_<rig>_FK`, made once per rig from the Skeletal Mesh: one FK control
+   per bone (`<bone>_FKC`, on the bone, parented like the bones) and a graph
+   driving each bone from its control (Get control → Set bone, global), as
+   the builder's FK module does.
+2. `LS_<rig>_<clip>_FK`: a Control Rig track of that rig whose base layer
+   holds the baked clip, a key per frame. The values need no solving: on a
+   rig instance each control is set where the bake has its bone (parents
+   first) and its value read back. Then the additive Animator layer, as in M1.
+3. Final export: the same exact export as M1 (`A_<rig>_<clip>_FK_Final`).
 
-To verify first in 5.6: the Python call that adds the FK Control Rig in
-layered/additive mode (`ControlRigSequencerLibrary.find_or_create_control_rig_track`
-and its layered flag, or the FK rig's apply mode), and that an empty FK
-layer plays the clip unchanged.
+It reads only the imported baked clip (no sidecar, no Kotsudo rig).
+
+**Why not Unreal's stock pieces (found 2026-11-24).** The first version
+played the baked clip on an animation track with Unreal's FK Control Rig on
+top in layered mode. It plays when scrubbed in the editor, but
+`SequencerTools.export_anim_sequence` (the bake the final export and the
+checks need) gives the first frame on every frame, whatever the options
+(warm-up, delay, custom mode, single-node mode, run from an editor tick).
+The native `FKControlRig` loaded with the clip
+(`load_anim_sequence_into_control_rig_section_with_range`) bakes frozen too.
+A blueprint Control Rig track bakes correctly, so M2 uses its own FK
+blueprint. Also found: a bake run while Sequencer shows *another* sequence
+is frozen as well (it froze M1 once); the final export now closes Sequencer
+first.
+
+Results (V010, clips exported 2026-11-10 and 2026-11-23):
+
+| Clip | Base layer vs the bake | Keys (animated channels of 1,053) | Build |
+|---|---|---|---|
+| FirstTestClip (21 frames) | 0.012 cm / 0.011° | 1,633 (29) | 24 s with the rig, 2.4 s without |
+| fk_body (49 frames) | 0.011 cm / 0.011° | 9,597 (178) | 2.4 s |
+
+Final export: empty layer = the bake (0.0 cm on both clips); +10° on
+`Head_FKC.Rotation.X` in the Animator layer turns `Head` 10.000° on every
+frame, only `Head`'s track rewritten, its children following.
 
 **M3, retake window** (an option on `run_anim_layers.py`:
 `RETAKE_RANGE = (start, end)`, `EASE_FRAMES`):
@@ -766,8 +790,31 @@ table added here.
 | Step | Delivers | Done when |
 |---|---|---|
 | **R0** | the five V010 clips re-exported from the current Maya scene; M1 re-measured | M1 numbers on fresh clips |
-| **R1** | M2 built | E4 = the bake (T0); E1 and E2 land |
+| **R1** ✅ | M2 built (2026-11-24) | E4 = the bake (0.0 cm); E1 lands (10.000°) |
 | **R2** | M3 built | E4 = the bake outside the window, within T1 inside; edges within the bake's own jumps |
 | **R3** | `run_retake_compare.py`: the four edits through the three methods, the report | the comparison table here and in the explainer |
 
 R1 and R2 don't depend on each other and can be worked on in parallel.
+
+### Using it by hand: the Kotsudo menu
+
+Every step is an entry of the **Kotsudo** menu in the Unreal main menu bar
+(`tools/unreal/kotsudo_menu.py`, loaded at editor start by the project's
+`Content/Python/init_unreal.py`; a copy is in `tools/unreal/init_unreal.py`).
+Each entry opens a small options window with the settings of its
+`run_*.py` script, then runs it; results go to the Output Log.
+
+| Menu | Script | Needs |
+|---|---|---|
+| Rig > Build Control Rig... | `run_rig_builder.py` | the Control Rig open |
+| Rig > Pose check... | `run_pose_harness.py` | the Control Rig open, the poses file |
+| Animation > 1. Import baked clips... | `run_anim_import.py` | the clips' `.anim.fbx` (+ `.anim.json` for the check) |
+| Animation > 2. Retake method > M1 Full control bake... | `run_anim_layers.py` | the clips' `.anim.json`, the Kotsudo Control Rig open |
+| Animation > 2. Retake method > M2 FK layer... | `run_anim_fk_layer.py` | the imported baked clips only |
+| Animation > 2. Retake method > M3 Retake window | (not built yet) | |
+| Animation > 3. Final export... | `run_anim_export.py` | a retake sequence (M1 and/or M2) |
+
+A demo by hand: open the rig's Control Rig, Kotsudo > Animation > 1, then
+2 > M2 (or M1), open `LS_<rig>_<clip>_FK` in Sequencer, key the Animator
+layer, then 3. The scripts still run on their own (File > Execute Python
+Script), with the same settings as constants at their top.

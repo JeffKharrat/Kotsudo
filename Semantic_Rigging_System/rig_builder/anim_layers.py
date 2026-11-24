@@ -204,10 +204,10 @@ def _level_actor(mesh, label):
     return actor
 
 
-def create_sequence(name, mesh, rig_class, document, actor_label, folder=SEQUENCE_FOLDER):
-    """A new Level Sequence bound to the level actor ``actor_label`` (showing
-    ``mesh``) with a Control Rig track of ``rig_class``.
-    Returns (sequence, binding, track)."""
+def make_sequence(name, mesh, fps, start, end, actor_label, folder=SEQUENCE_FOLDER):
+    """A Level Sequence ``folder/name`` (rebuilt in place if it exists) at
+    ``fps``, playing frames ``start``..``end``, bound to the level actor
+    ``actor_label`` (showing ``mesh``). Returns (sequence, binding)."""
     # No Sequencer calls here: opening and closing Sequencer within one Python
     # call (no editor frame between) crashed the editor (2026-11-23,
     # CloseLevelSequence -> invalid shared pointer). The caller closes it once
@@ -225,18 +225,26 @@ def create_sequence(name, mesh, rig_class, document, actor_label, folder=SEQUENC
             _delete_if_exists(path)
         sequence = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             name, folder, unreal.LevelSequence, unreal.LevelSequenceFactoryNew())
-    timing = document["time"]
-    fps = float(timing["fps"])
+    fps = float(fps)
     if abs(fps - round(fps)) > 1e-6:
         raise RuntimeError(f"Frame rate {fps} is not a whole number: not supported yet.")
     sequence.set_display_rate(unreal.FrameRate(int(round(fps)), 1))
-    start, end = int(round(timing["start"])), int(round(timing["end"]))
-    sequence.set_playback_start(start)
-    sequence.set_playback_end(end + 1)  # end is exclusive in Unreal
+    sequence.set_playback_start(int(round(start)))
+    sequence.set_playback_end(int(round(end)) + 1)  # end is exclusive in Unreal
     # A possessable (an actor in the level), not a spawnable: Unreal 5.6's
     # scripted spawnables are new-style bindings that the Anim Sequence
     # export never spawns ("No skel mesh found in Sequencer").
     binding = sequence.add_possessable(_level_actor(mesh, actor_label))
+    return sequence, binding
+
+
+def create_sequence(name, mesh, rig_class, document, actor_label, folder=SEQUENCE_FOLDER):
+    """A new Level Sequence bound to the level actor ``actor_label`` (showing
+    ``mesh``) with a Control Rig track of ``rig_class``.
+    Returns (sequence, binding, track)."""
+    timing = document["time"]
+    sequence, binding = make_sequence(name, mesh, timing["fps"], timing["start"], timing["end"],
+                                      actor_label, folder)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     track = unreal.ControlRigSequencerLibrary.find_or_create_control_rig_track(world, sequence, rig_class, binding, False)
     if track is None:
@@ -480,7 +488,7 @@ def _curve_values(anim, name, count):
     return out
 
 
-def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE_FOLDER):
+def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE_FOLDER, edit_sections=None):
     """The final Anim Sequence: Maya's baked clip plus, per bone and frame,
     what the animator layer changes in the rig's playback.
 
@@ -490,14 +498,18 @@ def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE
     the edit turned in the bone's own frame; scale bake x edited / unedited.
     A bone the layer doesn't change keeps the bake's own track, so untouched
     frames and bones are exactly Maya's. Morph curves: bake + (edited - unedited).
-    Returns (anim, summary)."""
+    ``edit_sections``: the sections holding the edits (None = the Control
+    Rig track's sections after the base one, the layered workflow's animator
+    layers). Returns (anim, summary)."""
     # The animator layers are the Control Rig track's sections after the base
     # one. They are muted by switching those sections off, which needs no
     # Sequencer (opening it from a script loop crashed the editor).
-    proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
-    if not proxies:
-        raise RuntimeError(f"{sequence.get_name()} has no Control Rig track.")
-    layer_sections = list(proxies[0].track.get_sections())[1:]
+    if edit_sections is None:
+        proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
+        if not proxies:
+            raise RuntimeError(f"{sequence.get_name()} has no Control Rig track.")
+        edit_sections = list(proxies[0].track.get_sections())[1:]
+    layer_sections = list(edit_sections)
     active = [section.is_active() for section in layer_sections]
     edited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Edited", folder, template=baked)
     try:
