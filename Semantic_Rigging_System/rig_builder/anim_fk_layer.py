@@ -98,6 +98,31 @@ def ensure_fk_rig(mesh, rig_name, rebuild=False, folder=anim_layers.SEQUENCE_FOL
     return blueprint, _populate(blueprint, path)
 
 
+def _control_sizes(hierarchy, bone_keys):
+    """Shape scale per bone (the shape library is unit-sized, in cm): a third
+    of the bone's length to its farthest child, else its parent's size, never
+    below 2% of the skeleton's height."""
+    position = {str(k.name): graph_utils.get_bone_global_position(hierarchy, str(k.name)) for k in bone_keys}
+    children = {}
+    for key in bone_keys:
+        parent = hierarchy.get_first_parent(key)
+        if parent is not None and str(parent.name) in position:
+            children.setdefault(str(parent.name), []).append(str(key.name))
+    heights = [p.z for p in position.values()] or [0.0]
+    floor = max(1.0, 0.02 * (max(heights) - min(heights)))
+    sizes = {}
+    for key in bone_keys:  # parents first
+        bone = str(key.name)
+        kids = children.get(bone) or []
+        if kids:
+            length = max((position[k] - position[bone]).length() for k in kids)
+            sizes[bone] = max(floor, length / 3.0)
+        else:
+            parent = hierarchy.get_first_parent(key)
+            sizes[bone] = sizes.get(str(parent.name), floor) if parent is not None else floor
+    return sizes
+
+
 def _populate(blueprint, path):
     """One FK control per bone, and the graph driving each bone from it."""
     hierarchy = blueprint.hierarchy
@@ -115,6 +140,7 @@ def _populate(blueprint, path):
         raise RuntimeError("Could not add a Forwards Solve event to the FK rig.")
 
     bone_keys = list(hierarchy.get_bones())
+    sizes = _control_sizes(hierarchy, bone_keys)
     world = graph_utils.invalid_key()
     color = unreal.LinearColor(FK_COLOR[0], FK_COLOR[1], FK_COLOR[2], 1.0)
     controls = {}
@@ -127,7 +153,7 @@ def _populate(blueprint, path):
                       if parent_bone in controls else world)
         name = control_name(bone)
         graph_utils.create_control(
-            hierarchy, hierarchy_controller, parent_key, name, None, color, (0.15, 0.15, 0.15),
+            hierarchy, hierarchy_controller, parent_key, name, None, color, (sizes[bone],) * 3,
             shape_name="Circle_Thin", global_transform=graph_utils.get_bone_global_transform(hierarchy, bone),
             display_name=bone)
         controls[bone] = name
