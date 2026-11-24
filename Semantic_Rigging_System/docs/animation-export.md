@@ -5,7 +5,8 @@ each clip becomes a Level Sequence whose Control Rig track has a locked
 base layer (Maya's control values, per frame) and an additive animator
 layer. Checked on the five V010 clips; the transfer adds nothing beyond the
 rig's own error. It replaces the retake window (route F, phase 1a).
-Details and results: section 15.
+Details and results: section 15. **Next (2026-11-24):** compare it with a
+lighter FK offset layer and a retake window, section 17.
 
 Earlier status (2026-11-02): **S0 built and tested** (Maya clip export, Animation
 tab, five script-made test clips). **S1 first Unreal run**: the `world`
@@ -479,7 +480,7 @@ Later, at least one clip made by an animator, not by a script.
 |---|---|---|
 | **1a** ✅ Layered workflow (replaces the retake window F) | locked base layer of per-frame control keys (B) + additive animator layer; section 15 | five V010 clips: transfer error ≤ 0.004 cm over the rig's own; layer adds as expected (2026-11-20) |
 | **1a+** ✅ Exact final export | the baked clip + (rig with the layer − rig without it), section 15 | empty layer = the bake (T0); a +10° head edit lands exactly, untouched bones equal the bake (2026-11-20) |
-| **1b** Stock comparison | Unreal's additive FK Control Rig on the same clip and range | the same three numbers, side by side |
+| **1b** Retake methods compared | full control bake vs FK offset layer vs retake window, section 17 | the section 17 table on three clips |
 
 **Axis 2: the animation as keys in the Control Rig**
 
@@ -667,3 +668,106 @@ observer, which feeds R3 (metrics). The two axes are two answers to "what
 does the animator need": axis 1 says a few editable frames on an exact clip;
 axis 2 says the whole animation, editable as in Maya. The edit-equivalence
 test gives axis 2 a direct, falsifiable measure.
+
+## 17. Retake methods compared (plan, 2026-11-24)
+
+Three ways to retake a baked Maya clip on a layer in Unreal, run on the same
+clips with the same edits and scored with the same numbers. Method 1 is
+built (section 15); 2 and 3 are new.
+
+### The three methods
+
+| | **M1 Full control bake** (built) | **M2 FK offset layer** (lightest) | **M3 Retake window** (in between) |
+|---|---|---|---|
+| Base | Our Control Rig, keyed on every frame from the sidecar (spot method, settle loop) | The baked Anim Sequence (route A), untouched | The baked Anim Sequence everywhere; our Control Rig keyed from the sidecar **only on the window** (+ ease frames) |
+| Animator edits | Our controls (FK, IK, splines, sliders) on an additive layer | Unreal's stock **FK Control Rig** (one control per bone) on top of the clip, additive | Our controls, inside the window only |
+| Needs the sidecar | yes | **no** | yes, window frames only |
+| Spot method runs on | every frame | no frame | window frames only |
+| IK, spaces, switches | yes | **no** (FK on bones only) | yes, in the window |
+| Outside the edit | rig error (≤ 0.5 cm on the arm ribbons), exact after the final export | exact (the bake) | exact (the bake) |
+| Main risk | cost: a key on every frame of every control | an IK-style edit (plant a hand) has to be done by rotating each bone | the jump at the window edges (rig pose vs bake) |
+
+**Why M2 needs no Maya data.** An offset layer doesn't need to know where
+Maya's controls were: every control starts at zero and *adds* to the bone
+the clip already plays. That only works when the control and the bone are
+the same thing, which is true for FK (rotate the forearm 10° more). For IK
+an offset layer would have to know where the hand already is to move it from
+there, which is the backwards problem: Unreal's Layered Control Rig solves it
+with the rig's Backwards Solve (our rigs have none), and M1/M3 solve it with
+Maya's spots. This is why the lightest method is FK only. Additive FK layers
+are the usual everyday tool for this (MotionBuilder and Maya animation
+layers, Unreal's own FK Control Rig on an animation track), so M2 is the
+industry baseline to beat.
+
+### What gets built
+
+**M2, FK offset layer** (`rig_builder/anim_fk_layer.py`, `run_anim_fk_layer.py`):
+
+1. Import the clip's baked FBX (route A, reused from `anim_import`).
+2. Level Sequence `LS_<rig>_<clip>_FK`: an animation track playing the clip,
+   and a Control Rig track with Unreal's FK Control Rig on the same binding,
+   in additive (layered) mode so its zeroed controls add to the clip.
+3. Final export: Sequencer's own bake (`SequencerTools.export_anim_sequence`)
+   to `A_<rig>_<clip>_FK_Final`; the exact-export rule of section 15 also
+   applies (bake + edited − unedited) and is the fallback if Sequencer's bake
+   is not exact.
+
+To verify first in 5.6: the Python call that adds the FK Control Rig in
+layered/additive mode (`ControlRigSequencerLibrary.find_or_create_control_rig_track`
+and its layered flag, or the FK rig's apply mode), and that an empty FK
+layer plays the clip unchanged.
+
+**M3, retake window** (an option on `run_anim_layers.py`:
+`RETAKE_RANGE = (start, end)`, `EASE_FRAMES`):
+
+1. Same import and sequence as M1, plus an animation track playing the bake.
+2. The Control Rig section covers only the window plus the ease frames,
+   keyed by the M1 code on those frames only, with section ease in and out,
+   and the additive Animator layer on top.
+3. Final export: section 15's exact export, which already writes only the
+   difference the layer makes, so outside the window it equals the bake.
+
+To verify first: how a Control Rig section's ease blends with the animation
+track under it in 5.6 (the base section replaces the bones, so the ease is
+what hides the rig-vs-bake gap at the edges).
+
+### The test
+
+Clips: `FirstTestClip` (the user's own) and `fk_body` and `ikfk_switch`
+(V010), after re-exporting them from the current Maya scene.
+
+Scripted edits, the same in every method where the method can do them:
+
+| Edit | M1 | M2 | M3 |
+|---|---|---|---|
+| E1 head +10° on frames 10–20 | head control | `Head` bone | head control, window 10–20 |
+| E2 left arm swung 45° on frames 10–20 | shoulder FK control | upper-arm bone | shoulder FK control |
+| E3 left hand moved 10 cm, held on frames 10–20, in IK | IK hand control | by hand on 3 bones (records how close and how many keys) | IK hand control |
+| E4 empty layer | | | |
+
+Numbers per method, per clip, per edit:
+
+1. **Untouched**: with the empty layer (E4), the final clip against the bake
+   (should be T0 for all three).
+2. **Edit lands**: the edited bone's change against the asked change
+   (10°, 45°, 10 cm).
+3. **Leaks**: largest change on bones the edit should not move.
+4. **Edges** (M3, and M1/M2 on the edit's first and last frames): largest
+   frame-to-frame jump against the same jump in the bake.
+5. **Cost**: build time, keys written, files needed (sidecar or not).
+6. **Reach**: which edits the method can do at all (IK, spaces, switches,
+   sliders).
+
+Report: one table per clip in `<base>.retake_compare.json`, and a summary
+table added here.
+
+### Order
+
+| Step | Delivers | Done when |
+|---|---|---|
+| **R0** | the five V010 clips re-exported from the current Maya scene; M1 re-measured | M1 numbers on fresh clips |
+| **R1** | M2 built | E4 = the bake (T0); E1 and E2 land |
+| **R2** | M3 built | E4 = the bake outside the window, within T1 inside; edges within the bake's own jumps |
+| **R3** | `run_retake_compare.py`: the four edits through the three methods, the report | the comparison table here and in the explainer |
+
+R1 and R2 don't depend on each other and can be worked on in parallel.
