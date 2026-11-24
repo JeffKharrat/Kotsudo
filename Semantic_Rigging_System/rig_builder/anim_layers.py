@@ -27,12 +27,12 @@ compared with the Maya joints in the sidecar (anim_import.check_anim_sequence).
 """
 
 import math
+import re
 
 import unreal
 
-from . import anim_import, pose_harness
+from . import anim_import, anim_paths, pose_harness
 
-SEQUENCE_FOLDER = "/Game/RigBuilder/Anims"
 ANIMATOR_LAYER_NAME = "Animator"
 # Below this a channel counts as constant (cm, degrees or plain value). The
 # solve runs in 32-bit floats, so a still control reads back with ~1e-4 noise.
@@ -204,15 +204,16 @@ def _level_actor(mesh, label):
     return actor
 
 
-def make_sequence(name, mesh, fps, start, end, actor_label, folder=SEQUENCE_FOLDER):
-    """A Level Sequence ``folder/name`` (rebuilt in place if it exists) at
+def make_sequence(path, mesh, fps, start, end, actor_label):
+    """A Level Sequence at ``path`` (rebuilt in place if it exists) at
     ``fps``, playing frames ``start``..``end``, bound to the level actor
     ``actor_label`` (showing ``mesh``). Returns (sequence, binding)."""
     # No Sequencer calls here: opening and closing Sequencer within one Python
     # call (no editor frame between) crashed the editor (2026-11-23,
     # CloseLevelSequence -> invalid shared pointer). The caller closes it once
     # before the first clip; layers are added on later frames (add_layers_later).
-    path = f"{folder}/{name}"
+    folder, name = anim_paths.split(path)
+    unreal.EditorAssetLibrary.make_directory(folder)
     sequence = unreal.EditorAssetLibrary.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else None
     if isinstance(sequence, unreal.LevelSequence):
         # Rebuilt in place (deleting fails while anything still references it).
@@ -238,13 +239,12 @@ def make_sequence(name, mesh, fps, start, end, actor_label, folder=SEQUENCE_FOLD
     return sequence, binding
 
 
-def create_sequence(name, mesh, rig_class, document, actor_label, folder=SEQUENCE_FOLDER):
+def create_sequence(path, mesh, rig_class, document, actor_label):
     """A new Level Sequence bound to the level actor ``actor_label`` (showing
     ``mesh``) with a Control Rig track of ``rig_class``.
     Returns (sequence, binding, track)."""
     timing = document["time"]
-    sequence, binding = make_sequence(name, mesh, timing["fps"], timing["start"], timing["end"],
-                                      actor_label, folder)
+    sequence, binding = make_sequence(path, mesh, timing["fps"], timing["start"], timing["end"], actor_label)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     track = unreal.ControlRigSequencerLibrary.find_or_create_control_rig_track(world, sequence, rig_class, binding, False)
     if track is None:
@@ -309,6 +309,33 @@ _LAYER_JOBS = {"queue": [], "handle": None, "wait": 0, "opened": None, "done": [
 FRAMES_BETWEEN_SEQUENCER_STEPS = 5
 
 
+def _job(job):
+    """A layer job: (sequence, controls) or a dict with "sequence",
+    "controls" and optionally "rig_class" (the class name of the track to
+    layer, when a sequence has several) and "match_base" (give the layer the
+    base section's range and ease, for a section that covers part of the clip)."""
+    if isinstance(job, dict):
+        return job
+    sequence, controls = job
+    return {"sequence": sequence, "controls": controls}
+
+
+def _match_base_section(track, sequence):
+    sections = list(track.get_sections())
+    if len(sections) < 2:
+        return
+    base = sections[0]
+    text = base.get_editor_property("easing").export_text()
+    fields = ",".join(f"{name}={value}" for name, value in
+                      re.findall(r"(bManualEase(?:In|Out)|ManualEase(?:In|Out)Duration)=([^,)]+)", text))
+    for section in sections[1:]:
+        section.set_range(base.get_start_frame(), base.get_end_frame())
+        if fields:
+            own = section.get_editor_property("easing")
+            own.import_text(f"({fields})")
+            section.set_editor_property("easing", own)
+
+
 def add_layers_later(jobs):
     """Add the animator layer to each (sequence, controls) on later editor
     frames, one Sequencer step per few frames: open the sequence, let the
@@ -338,17 +365,22 @@ def add_layers_later(jobs):
                     _log(f"Animator layer added to {len(state['done'])} sequence(s): "
                          f"{', '.join(state['done'])}. Ready to animate.")
                     return
-                sequence, controls = state["queue"].pop(0)
-                state["opened"] = (sequence, controls)
-                unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
+                job = _job(state["queue"].pop(0))
+                state["opened"] = job
+                unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(job["sequence"])
             else:
-                sequence, controls = state["opened"]
+                job = state["opened"]
                 state["opened"] = None
-                proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
-                control_rig = proxies[0].control_rig if proxies else None
-                if control_rig is None:
+                sequence = job["sequence"]
+                proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence) or []
+                if job.get("rig_class"):
+                    proxies = [p for p in proxies if p.control_rig.get_class().get_name() == job["rig_class"]]
+                proxy = proxies[0] if proxies else None
+                if proxy is None:
                     _warn(f"{sequence.get_name()}: no Control Rig on the track, animator layer not added.")
-                elif add_animator_layer(sequence, control_rig, controls) is not None:
+                elif add_animator_layer(sequence, proxy.control_rig, job["controls"]) is not None:
+                    if job.get("match_base"):
+                        _match_base_section(proxy.track, sequence)
                     unreal.EditorAssetLibrary.save_loaded_asset(sequence, False)
                     state["done"].append(sequence.get_name())
         except Exception as exc:
@@ -402,10 +434,12 @@ def add_animator_layer(sequence, control_rig, controls, name=ANIMATOR_LAYER_NAME
 # End-to-end check
 # ---------------------------------------------------------------------------
 
-def export_to_anim_sequence(sequence, binding, skeleton, mesh, name, folder=SEQUENCE_FOLDER, template=None):
-    """Bake the Level Sequence to an Anim Sequence with Unreal's own
-    evaluation (what the animator sees). Returns the Anim Sequence."""
-    _delete_if_exists(f"{folder}/{name}")
+def export_to_anim_sequence(sequence, binding, skeleton, mesh, path, template=None):
+    """Bake the Level Sequence to an Anim Sequence at ``path`` with Unreal's
+    own evaluation (what the animator sees). Returns the Anim Sequence."""
+    folder, name = anim_paths.split(path)
+    unreal.EditorAssetLibrary.make_directory(folder)
+    _delete_if_exists(path)
     rate = sequence.get_display_rate()
     anim = None
     if template is not None:
@@ -488,7 +522,7 @@ def _curve_values(anim, name, count):
     return out
 
 
-def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE_FOLDER, edit_sections=None):
+def export_exact(sequence, binding, baked, skeleton, mesh, final_path, edit_sections=None):
     """The final Anim Sequence: Maya's baked clip plus, per bone and frame,
     what the animator layer changes in the rig's playback.
 
@@ -511,11 +545,11 @@ def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE
         edit_sections = list(proxies[0].track.get_sections())[1:]
     layer_sections = list(edit_sections)
     active = [section.is_active() for section in layer_sections]
-    edited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Edited", folder, template=baked)
+    edited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{final_path}_Edited", template=baked)
     try:
         for section in layer_sections:
             section.set_is_active(False)
-        unedited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{name}_Unedited", folder,
+        unedited = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"{final_path}_Unedited",
                                            template=baked)
     finally:
         for section, was_active in zip(layer_sections, active):
@@ -542,7 +576,6 @@ def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE
         if worst_t > EDIT_TOLERANCE_CM or worst_r > EDIT_TOLERANCE_DEG:
             changed[bone] = (worst_t, worst_r)
 
-    final_path = f"{folder}/{name}"
     _delete_if_exists(final_path)
     final = unreal.EditorAssetLibrary.duplicate_loaded_asset(baked, final_path)
     if final is None:
@@ -590,8 +623,8 @@ def export_exact(sequence, binding, baked, skeleton, mesh, name, folder=SEQUENCE
         unreal.AnimationLibrary.add_float_curve_keys(final, curve, times, values)
         curves_changed.append(curve)
 
-    for helper in (f"{name}_Edited", f"{name}_Unedited"):
-        _delete_if_exists(f"{folder}/{helper}")
+    for helper in (f"{final_path}_Edited", f"{final_path}_Unedited"):
+        _delete_if_exists(helper)
     unreal.EditorAssetLibrary.save_loaded_asset(final, False)
     summary = {"bones_changed": {b: (round(t, 4), round(r, 4)) for b, (t, r) in changed.items()},
                "curves_changed": curves_changed, "bones": len(bones), "frames": count}
@@ -616,8 +649,8 @@ def build_layered_clip(rig_blueprint, rig_class, mesh, skeleton, document, manif
         _warn(f"{len(values['missing'])} control(s)/channel(s) of the clip are not in the rig: "
               f"{', '.join(values['missing'][:8])}")
 
-    sequence, binding, track = create_sequence(f"LS_{rig_name}_{clip}", mesh, rig_class, document,
-                                               actor_label=f"{rig_name}_Anim")
+    sequence, binding, track = create_sequence(anim_paths.sequence(rig_name, clip, "full_bake"), mesh, rig_class,
+                                               document, actor_label=f"{rig_name}_Anim")
     sections = track.get_sections()
     if not sections:
         raise RuntimeError("The Control Rig track has no section.")
@@ -635,8 +668,9 @@ def build_layered_clip(rig_blueprint, rig_class, mesh, skeleton, document, manif
 
     report = None
     if check:
-        anim = export_to_anim_sequence(sequence, binding, skeleton, mesh, f"A_{rig_name}_{clip}_ControlRig",
-                                       template=baked_anim)
+        temp = f"{anim_paths.temp_folder(rig_name)}/A_{rig_name}_{clip}_FullBake_Check"
+        anim = export_to_anim_sequence(sequence, binding, skeleton, mesh, temp, template=baked_anim)
         report = anim_import.check_anim_sequence(anim, document, manifest, report_path,
                                                  label=f"{clip} on the Control Rig (base layer)")
+        unreal.EditorAssetLibrary.delete_directory(anim_paths.temp_folder(rig_name))
     return {"sequence": sequence, "stats": stats, "report": report, "layer_job": layer_job}

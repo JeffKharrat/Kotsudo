@@ -11,9 +11,10 @@ Adds "Kotsudo" to the Level Editor's main menu bar:
         2. Retake method
              M1  Full control bake...
              M2  FK layer...
-             M3  Retake window (next)
-        3. Final export...
+             M3  Retake window...
+        3. Bake retakes to Anim Sequences (optional)...
       Help
+        Tidy the Anims folder
         Open the animation plan
 
 Each entry opens a small options window (the same settings as the
@@ -95,15 +96,31 @@ STEPS = {
             ("REBUILD_FK_RIG", "bool", False, "Rebuild the FK rig (CR_<rig>_FK)"),
         ],
     },
-    "final_export": {
-        "script": "run_anim_export.py",
-        "label": "3. Final export...",
-        "tip": "Write the final Anim Sequence of each retake sequence: the bake plus what the Animator "
-               "layer changes (untouched bones stay exactly Maya's).",
+    "window": {
+        "script": "run_anim_window.py",
+        "label": "M3  Retake window...",
+        "tip": "The bake plays everywhere; the Kotsudo rig takes over only on the frames to retake, easing in "
+               "and out. Needs the .anim.json and the Kotsudo Control Rig open.",
         "options": [
             ("CLIP_NAMES", "clips", "", "Clips (comma separated, empty = all)"),
-            ("EXPORT_FULL_BAKE", "bool", True, "M1 sequences (LS_<rig>_<clip>)"),
-            ("EXPORT_FK_LAYER", "bool", True, "M2 sequences (LS_<rig>_<clip>_FK)"),
+            ("WINDOW_START", "int", -1, "First frame to retake (-1 = middle third)"),
+            ("WINDOW_END", "int", -1, "Last frame to retake"),
+            ("EASE_FRAMES", "int", 3, "Ease frames (bake to rig, and back)"),
+            ("ADD_ANIMATOR_LAYER", "bool", True, "Add the Animator layer"),
+            ("CHECK", "bool", True, "Check against the bake"),
+        ],
+    },
+    "final_export": {
+        "script": "run_anim_export.py",
+        "label": "3. Bake retakes to Anim Sequences (optional)...",
+        "tip": "Turn each retake sequence into a plain Anim Sequence inside the project (Final folder): the "
+               "bake plus what the Animator layer changes. Only needed to use a retake outside Sequencer "
+               "(Animation Blueprint, Montage...).",
+        "options": [
+            ("CLIP_NAMES", "clips", "", "Clips (comma separated, empty = all)"),
+            ("EXPORT_FULL_BAKE", "bool", True, "M1 retakes (_FullBake)"),
+            ("EXPORT_FK_LAYER", "bool", True, "M2 retakes (_FK)"),
+            ("EXPORT_WINDOW", "bool", True, "M3 retakes (_Window)"),
             ("CHECK", "bool", True, "Check the result"),
         ],
     },
@@ -113,9 +130,18 @@ STEPS = {
 _DERIVED = {
     "final_export": lambda values: {
         "METHODS": tuple(m for m, on in (("full_bake", values.pop("EXPORT_FULL_BAKE")),
-                                          ("fk_layer", values.pop("EXPORT_FK_LAYER"))) if on),
+                                          ("fk_layer", values.pop("EXPORT_FK_LAYER")),
+                                          ("window", values.pop("EXPORT_WINDOW"))) if on),
     },
+    "window": lambda values: {"WINDOW": _window(values.pop("WINDOW_START"), values.pop("WINDOW_END"))},
 }
+
+
+def _window(start, end):
+    """(first, last) frame, or None (the script then takes the middle third)."""
+    if start < 0:
+        return None
+    return (start, max(start, end))
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +158,7 @@ def _options_class(step_id):
         return _OPTION_CLASSES[step_id]
     attributes = {}
     for attribute, kind, _default, label in STEPS[step_id]["options"]:
-        prop_type = bool if kind == "bool" else str
+        prop_type = {"bool": bool, "int": int}.get(kind, str)
         attributes[attribute.lower()] = unreal.uproperty(prop_type, meta={"DisplayName": label})
     name = "KotsudoOptions_" + "".join(part.title() for part in step_id.split("_"))
     cls = unreal.uclass()(type(name, (unreal.Object,), attributes))
@@ -213,6 +239,23 @@ def run(step_id, ask=True, **overrides):
         return False
 
 
+def tidy():
+    """Kotsudo > Help > Tidy the Anims folder: for the open Control Rig's mesh."""
+    import sys
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from rig_builder import anim_paths
+    rigs = unreal.ControlRigBlueprint.get_currently_open_rig_blueprints()
+    mesh = rigs[0].get_preview_mesh() if rigs else None
+    if mesh is None:
+        unreal.EditorDialog.show_message("Kotsudo", "Open the rig's Control Rig first.", unreal.AppMsgType.OK)
+        return
+    unreal.LevelSequenceEditorBlueprintLibrary.close_level_sequence()
+    result = anim_paths.organize(mesh.get_name())
+    unreal.log(f"[Kotsudo] Tidied: {len(result['moved'])} moved, {len(result['deleted'])} deleted, "
+               f"{len(result['failed'])} failed {result['failed']}")
+
+
 def open_docs():
     os.startfile(DOCS)  # noqa: S606 -- opens the plan in the default viewer
 
@@ -260,12 +303,13 @@ def register():
     retake.add_section("Methods", "Compared in docs/animation-export.md, section 17")
     _step_entry(retake, "Methods", "full_bake")
     _step_entry(retake, "Methods", "fk_layer")
-    _entry(retake, "Methods", "Kotsudo_retake_window", "M3  Retake window (next)",
-           "The Kotsudo rig only on the frames you retake, the bake everywhere else. Not built yet.",
-           "", enabled=False)
+    _step_entry(retake, "Methods", "window")
     _step_entry(kotsudo, "Animation", "final_export")
 
     kotsudo.add_section("Help", "Help")
+    _entry(kotsudo, "Help", "Kotsudo_tidy", "Tidy the Anims folder",
+           "Move the open rig's animation assets into /Game/RigBuilder/Anims/<rig>/Clips, Retakes, Rigs "
+           "and Final, and delete leftover check bakes.", "import kotsudo_menu; kotsudo_menu.tidy()")
     _entry(kotsudo, "Help", "Kotsudo_docs", "Open the animation plan",
            "docs/animation-export.md", "import kotsudo_menu; kotsudo_menu.open_docs()")
     menus.refresh_all_widgets()

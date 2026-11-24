@@ -1,7 +1,8 @@
 """Animation clip import, shared start (S1) -- run inside Unreal.
 
 Imports a clip exported from Maya (Animation tab of the tagger tool) as an
-Anim Sequence on the open rig's skeleton, then checks it bone by bone, frame
+Anim Sequence (/Game/RigBuilder/Anims/<rig>/Clips/A_<rig>_<clip>)
+on the open rig's skeleton, then checks it bone by bone, frame
 by frame, against the Maya joints in the clip's sidecar. The verdict should
 be T0: that is the measuring stick every later animation step is judged by.
 
@@ -27,7 +28,7 @@ importlib.invalidate_caches()
 
 import unreal  # noqa: E402
 
-from rig_builder import anim_import, manifest_schema  # noqa: E402
+from rig_builder import anim_import, anim_paths, manifest_schema  # noqa: E402
 from rig_builder.builder import RigBuilder  # noqa: E402
 from rig_builder.metadata_reader import get_asset_metadata, read_manifest_document  # noqa: E402
 
@@ -116,9 +117,11 @@ def main():
         modes = (False, True) if PRESERVE_LOCAL_TRANSFORM is None else (bool(PRESERVE_LOCAL_TRANSFORM),)
         for preserve in modes:
             suffix = "_local" if preserve else ""
-            base = "A_" + fbx_name.replace(".anim.fbx", "").replace(".", "_")
+            clips_folder, base = anim_paths.split(anim_paths.baked(document.get("rig_name") or "rig",
+                                                                   document.get("clip")))
             anim = anim_import.import_baked_clip(os.path.join(folder, fbx_name), skeleton,
-                                                 asset_name=base + suffix, preserve_local_transform=preserve,
+                                                 destination=clips_folder, asset_name=base + suffix,
+                                                 preserve_local_transform=preserve,
                                                  frame_range=(document["time"]["start"], document["time"]["end"]))
             report_path = clip_path.replace(".anim.json", f".anim_check{suffix}.json")
             mode = "FBX local transforms" if preserve else "Unreal default import"

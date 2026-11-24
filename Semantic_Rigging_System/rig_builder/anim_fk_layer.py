@@ -29,9 +29,8 @@ import math
 
 import unreal
 
-from . import anim_import, anim_layers, graph_utils, pose_harness
+from . import anim_import, anim_layers, anim_paths, graph_utils, pose_harness
 
-FK_SUFFIX = "_FK"
 CONTROL_SUFFIX = "_FKC"
 FK_COLOR = (0.2, 0.75, 1.0)
 
@@ -42,14 +41,6 @@ def _log(message):
 
 def _warn(message):
     unreal.log_warning(f"[FKLayer] {message}")
-
-
-def rig_path(rig_name, folder=anim_layers.SEQUENCE_FOLDER):
-    return f"{folder}/CR_{rig_name}{FK_SUFFIX}"
-
-
-def sequence_name(rig_name, clip):
-    return f"LS_{rig_name}_{clip}{FK_SUFFIX}"
 
 
 def control_name(bone):
@@ -73,11 +64,11 @@ def _compile(blueprint):
         unreal.ControlRigBlueprintLibrary.request_control_rig_init(blueprint)
 
 
-def ensure_fk_rig(mesh, rig_name, rebuild=False, folder=anim_layers.SEQUENCE_FOLDER):
+def ensure_fk_rig(mesh, rig_name, rebuild=False):
     """``CR_<rig>_FK`` for ``mesh``: made if missing, its controls and graph
     (re)built if incomplete or ``rebuild`` (in place, so sequences using it
     keep working). Returns (blueprint, {bone: control})."""
-    path = rig_path(rig_name, folder)
+    path = anim_paths.fk_rig(rig_name)
     library = unreal.EditorAssetLibrary
     blueprint = library.load_asset(path) if library.does_asset_exist(path) else None
     if blueprint is None:
@@ -85,6 +76,7 @@ def ensure_fk_rig(mesh, rig_name, rebuild=False, folder=anim_layers.SEQUENCE_FOL
         if made is None:
             raise RuntimeError(f"Could not make a Control Rig from {mesh.get_name()}.")
         made_path = made.get_path_name().split(".")[0]
+        library.make_directory(anim_paths.split(path)[0])
         if made_path != path and not library.rename_asset(made_path, path):
             raise RuntimeError(f"Could not move the new FK rig {made_path} to {path}.")
         blueprint = library.load_asset(path)
@@ -275,8 +267,8 @@ def build_fk_clip(baked, mesh, skeleton, rig_name, clip, start=0, add_layer=True
     length = unreal.AnimationLibrary.get_sequence_length(baked)
     fps = round((count - 1) / length, 3) if length > 0 else 30.0
     frames = [start + i for i in range(count)]
-    sequence, binding = anim_layers.make_sequence(sequence_name(rig_name, clip), mesh, fps, frames[0], frames[-1],
-                                                  actor_label=f"{rig_name}_Anim")
+    sequence, binding = anim_layers.make_sequence(anim_paths.sequence(rig_name, clip, "fk_layer"), mesh, fps,
+                                                  frames[0], frames[-1], actor_label=f"{rig_name}_Anim")
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     track = unreal.ControlRigSequencerLibrary.find_or_create_control_rig_track(
         world, sequence, _rig_class(blueprint), binding, False)
@@ -291,11 +283,12 @@ def build_fk_clip(baked, mesh, skeleton, rig_name, clip, start=0, add_layer=True
 
     report = None
     if check:
-        played = anim_layers.export_to_anim_sequence(sequence, binding, skeleton, mesh,
-                                                     f"A_{rig_name}_{clip}_FK_Base", template=baked)
+        played = anim_layers.export_to_anim_sequence(
+            sequence, binding, skeleton, mesh, f"{anim_paths.temp_folder(rig_name)}/A_{rig_name}_{clip}_FK_Check",
+            template=baked)
         report = compare_with_bake(played, baked)
         _log(f"Clip '{clip}': FK base layer vs the bake: {report['position_cm']} cm / "
              f"{report['rotation_deg']} deg (worst {report['worst_bones'][:2]}).")
-        unreal.EditorAssetLibrary.delete_asset(played.get_path_name().split(".")[0])
+        unreal.EditorAssetLibrary.delete_directory(anim_paths.temp_folder(rig_name))
     layer_job = (sequence, list(values["transforms"])) if add_layer else None
     return {"sequence": sequence, "stats": stats, "check": report, "layer_job": layer_job}

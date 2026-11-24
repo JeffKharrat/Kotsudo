@@ -1,7 +1,7 @@
 """Maya clip -> Control Rig base layer + animator layer -- run inside Unreal.
 
 For each clip exported from Maya (Animation tab of the tagger tool), makes
-/Game/RigBuilder/Anims/LS_<rig>_<clip>: the rig's mesh with a Control Rig
+/Game/RigBuilder/Anims/<rig>/Retakes/LS_<rig>_<clip>_FullBake (retake method M1): the rig's mesh with a Control Rig
 track whose base layer holds the clip on the controls (locked) and an empty
 additive "Animator" layer on top. Then bakes the sequence to an Anim
 Sequence with Unreal's own evaluation and checks every bone on every frame
@@ -24,7 +24,7 @@ importlib.invalidate_caches()
 
 import unreal  # noqa: E402
 
-from rig_builder import anim_import, anim_layers, manifest_schema  # noqa: E402
+from rig_builder import anim_import, anim_layers, anim_paths, manifest_schema  # noqa: E402
 from rig_builder.builder import RigBuilder  # noqa: E402
 from rig_builder.metadata_reader import get_asset_metadata, read_manifest_document  # noqa: E402
 
@@ -92,7 +92,7 @@ def main():
     # Sequencer is closed at most once, here, if it shows a sequence about to
     # be rebuilt; it is never opened and closed again within this call.
     anim_layers.close_sequencer_if_showing(
-        {f"{anim_layers.SEQUENCE_FOLDER}/LS_{d.get('rig_name') or 'rig'}_{d.get('clip')}" for _, d in clips})
+        {anim_paths.sequence(d.get("rig_name") or "rig", d.get("clip"), "full_bake") for _, d in clips})
     results, layer_jobs = [], []
     for clip_path, document in clips:
         # The baked clip (route A) next to it: the layer the final export
@@ -101,11 +101,11 @@ def main():
         fbx_name = document.get("fbx_file")
         fbx_path = os.path.join(os.path.dirname(clip_path), fbx_name) if fbx_name else None
         if fbx_path and os.path.isfile(fbx_path):
-            asset_name = "A_" + fbx_name.replace(".anim.fbx", "").replace(".", "_")
-            asset_path = f"{anim_layers.SEQUENCE_FOLDER}/{asset_name}"
+            asset_path = anim_paths.baked(document.get("rig_name") or "rig", document.get("clip"))
             if REIMPORT_BAKED or not unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+                folder, asset_name = anim_paths.split(asset_path)
                 baked = anim_import.import_baked_clip(
-                    fbx_path, skeleton, asset_name=asset_name,
+                    fbx_path, skeleton, destination=folder, asset_name=asset_name,
                     frame_range=(document["time"]["start"], document["time"]["end"]))
             else:
                 baked = unreal.EditorAssetLibrary.load_asset(asset_path)

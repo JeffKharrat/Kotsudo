@@ -6,8 +6,8 @@ baked clips, or run_anim_import.py): no sidecar, no Kotsudo rig.
 
 For each clip makes:
 
-* /Game/RigBuilder/Anims/CR_<rig>_FK (once per rig): one FK control per bone;
-* /Game/RigBuilder/Anims/LS_<rig>_<clip>_FK: the clip as keys on those
+* /Game/RigBuilder/Anims/<rig>/Rigs/CR_<rig>_FK (once per rig): one FK control per bone;
+* /Game/RigBuilder/Anims/<rig>/Retakes/LS_<rig>_<clip>_FK: the clip as keys on those
   controls (locked base layer) and an empty additive "Animator" layer.
 
 Then checks the base layer against the bake (Unreal's own playback, every
@@ -15,7 +15,7 @@ bone on every frame). The final Anim Sequence comes from the Final export
 step (run_anim_export.py), as for the other methods.
 
 Which clips: CLIP_NAMES, else the Anim Sequences selected in the Content
-Browser, else every baked clip of the rig in /Game/RigBuilder/Anims.
+Browser, else every baked clip in /Game/RigBuilder/Anims/<rig>/Clips.
 """
 
 import importlib
@@ -31,7 +31,7 @@ importlib.invalidate_caches()
 
 import unreal  # noqa: E402
 
-from rig_builder import anim_fk_layer, anim_layers  # noqa: E402
+from rig_builder import anim_fk_layer, anim_layers, anim_paths  # noqa: E402
 
 CONTROL_RIG_PATH = None     # None = the open Control Rig (only its preview mesh is used)
 MESH_PATH = None            # or the Skeletal Mesh directly (then no Control Rig is needed)
@@ -39,10 +39,6 @@ CLIP_NAMES = None           # e.g. ["fk_body"]; None = the selected Anim Sequenc
 ADD_ANIMATOR_LAYER = True
 CHECK = True                # compare the base layer's playback with the bake
 REBUILD_FK_RIG = False      # True = rebuild CR_<rig>_FK's controls and graph
-
-# Anim Sequences made by the tools from a baked clip, never clips themselves.
-DERIVED_SUFFIXES = ("_ControlRig", "_Final", "_FK_Final", "_FK_Base", "_Edited", "_Unedited", "_local")
-
 
 def _mesh():
     if MESH_PATH:
@@ -69,13 +65,8 @@ def _clips(rig_name, skeleton):
     if selected:
         candidates = selected
     else:
-        candidates = []
-        for path in unreal.EditorAssetLibrary.list_assets(anim_layers.SEQUENCE_FOLDER, False):
-            name = path.split(".")[-1]
-            if name.startswith(prefix) and not name.endswith(DERIVED_SUFFIXES):
-                asset = unreal.EditorAssetLibrary.load_asset(path.split(".")[0])
-                if isinstance(asset, unreal.AnimSequence):
-                    candidates.append(asset)
+        candidates = [unreal.EditorAssetLibrary.load_asset(p) for p in anim_paths.baked_clips(rig_name).values()]
+        candidates = [a for a in candidates if isinstance(a, unreal.AnimSequence)]
     clips = []
     for anim in candidates:
         name = anim.get_name()
@@ -97,10 +88,10 @@ def main():
     rig_name = mesh.get_name()
     clips = _clips(rig_name, skeleton)
     if not clips:
-        raise RuntimeError(f"No baked clip of {rig_name} in {anim_layers.SEQUENCE_FOLDER}: import the clips "
+        raise RuntimeError(f"No baked clip of {rig_name} in {anim_paths.folder(rig_name, 'Clips')}: import the clips "
                            "first (Kotsudo > Animation > Import baked clips).")
     anim_layers.close_sequencer_if_showing(
-        {f"{anim_layers.SEQUENCE_FOLDER}/{anim_fk_layer.sequence_name(rig_name, c)}" for c, _ in clips})
+        {anim_paths.sequence(rig_name, c, "fk_layer") for c, _ in clips})
     layer_jobs = []
     rebuild = REBUILD_FK_RIG
     for clip, baked in clips:

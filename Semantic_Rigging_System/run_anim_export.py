@@ -5,8 +5,9 @@ writes the final Anim Sequence: Maya's baked clip plus what the animator
 layers change. Bones and morph curves the layers don't touch keep the bake's
 own tracks, exactly Maya's.
 
-* M1 full control bake (run_anim_layers.py): LS_<rig>_<clip> -> A_<rig>_<clip>_Final
-* M2 FK layer (run_anim_fk_layer.py): LS_<rig>_<clip>_FK -> A_<rig>_<clip>_FK_Final
+Retakes/LS_<rig>_<clip>_<method> -> Final/A_<rig>_<clip>_<method>_Final, in
+/Game/RigBuilder/Anims/<rig>/ (rig_builder/anim_paths.py), for M1 (FullBake),
+M2 (FK) and M3 (Window).
 
 Then checks the result: against the bake (every method, no sidecar needed;
 only the edited bones should differ) and, when the clip's sidecar is found,
@@ -31,16 +32,25 @@ importlib.invalidate_caches()
 
 import unreal  # noqa: E402
 
-from rig_builder import anim_fk_layer, anim_import, anim_layers, manifest_schema  # noqa: E402
+from rig_builder import anim_fk_layer, anim_import, anim_layers, anim_paths, anim_window, manifest_schema  # noqa: E402
 from rig_builder.metadata_reader import get_asset_metadata, read_manifest_document  # noqa: E402
 
 CONTROL_RIG_PATH = None     # None = the open Control Rig
 CLIP_NAMES = None           # None = every clip that has a layered sequence; else e.g. ["fk_body"]
-METHODS = ("full_bake", "fk_layer")   # which retake methods' sequences to export
+METHODS = ("full_bake", "fk_layer", "window")   # which retake methods' sequences to export
 CHECK = True
 
-# method: (sequence name suffix, final name suffix)
-_METHODS = {"full_bake": ("", "_Final"), "fk_layer": (anim_fk_layer.FK_SUFFIX, "_FK_Final")}
+
+
+def _edit_sections(sequence, method, rig_name):
+    """The animator layers' sections: the Control Rig track's sections after
+    the base one (M3: on the Kotsudo rig's track, not the FK one)."""
+    if method == "window":
+        track = anim_window.rig_tracks(sequence, rig_name)[1]
+    else:
+        proxies = unreal.ControlRigSequencerLibrary.get_control_rigs(sequence)
+        track = proxies[0].track if proxies else None
+    return list(track.get_sections())[1:] if track is not None else []
 
 
 def _mesh():
@@ -75,56 +85,43 @@ def main():
         if (document.get("rig_name") or rig_name) == rig_name:
             sidecars[document.get("clip")] = (clip_path, document)
 
-    folder = anim_layers.SEQUENCE_FOLDER
-    names = [p.split(".")[-1] for p in unreal.EditorAssetLibrary.list_assets(folder, False)]
     verdicts = []
     # Exports must not run while Sequencer shows another sequence: the bake
     # then plays the open one's state (frozen pose, 2026-11-24).
     unreal.LevelSequenceEditorBlueprintLibrary.close_level_sequence()
-    for method in METHODS:
-        sequence_suffix, final_suffix = _METHODS[method]
-        prefix = f"LS_{rig_name}_"
-        for name in names:
-            if not name.startswith(prefix):
-                continue
-            clip = name[len(prefix):]
-            if sequence_suffix:
-                if not clip.endswith(sequence_suffix):
-                    continue
-                clip = clip[: -len(sequence_suffix)]
-            elif any(clip.endswith(s) for _, (s, _f) in _METHODS.items() if s):
-                continue
-            if CLIP_NAMES and clip not in CLIP_NAMES:
-                continue
-            baked_path = f"{folder}/A_{rig_name}_{clip}"
-            if not unreal.EditorAssetLibrary.does_asset_exist(baked_path):
-                unreal.log_warning(f"[AnimExport] {name}: no baked clip {baked_path}, skipped.")
-                continue
-            sequence = unreal.EditorAssetLibrary.load_asset(f"{folder}/{name}")
-            baked = unreal.EditorAssetLibrary.load_asset(baked_path)
-            bindings = list(sequence.get_bindings())
-            if not bindings:
-                unreal.log_warning(f"[AnimExport] {name} has no binding, skipped.")
-                continue
-            final, summary = anim_layers.export_exact(sequence, bindings[0], baked, skeleton, mesh,
-                                                      f"A_{rig_name}_{clip}{final_suffix}")
-            if not CHECK:
-                continue
-            vs_bake = anim_fk_layer.compare_with_bake(final, baked)
-            line = (f"VERDICT ({clip}, {method}): {len(summary['bones_changed'])} bone(s) edited; "
-                    f"farthest from the bake {vs_bake['position_cm']} cm / {vs_bake['rotation_deg']} deg")
-            unreal.log(f"[AnimExport] {line}")
-            verdicts.append(line)
-            if method == "full_bake" and clip in sidecars:
-                clip_path, document = sidecars[clip]
-                report_path = clip_path.replace(".anim.json", ".final_check.json")
-                report = anim_import.check_anim_sequence(final, document, manifest, report_path,
-                                                         label=f"{clip}, exact final export")
-                report["edits"] = summary
-                report["vs_bake"] = vs_bake
-                with open(report_path, "w", encoding="utf-8") as handle:
-                    json.dump(report, handle, indent=1)
-                verdicts.append(report["verdict"])
+    for clip, method, sequence_path in anim_paths.retake_sequences(rig_name, METHODS):
+        if CLIP_NAMES and clip not in CLIP_NAMES:
+            continue
+        baked_path = anim_paths.baked(rig_name, clip)
+        if not unreal.EditorAssetLibrary.does_asset_exist(baked_path):
+            unreal.log_warning(f"[AnimExport] {sequence_path}: no baked clip {baked_path}, skipped.")
+            continue
+        sequence = unreal.EditorAssetLibrary.load_asset(sequence_path)
+        baked = unreal.EditorAssetLibrary.load_asset(baked_path)
+        bindings = list(sequence.get_bindings())
+        if not bindings:
+            unreal.log_warning(f"[AnimExport] {sequence_path} has no binding, skipped.")
+            continue
+        final, summary = anim_layers.export_exact(sequence, bindings[0], baked, skeleton, mesh,
+                                                  anim_paths.final(rig_name, clip, method),
+                                                  edit_sections=_edit_sections(sequence, method, rig_name))
+        if not CHECK:
+            continue
+        vs_bake = anim_fk_layer.compare_with_bake(final, baked)
+        line = (f"VERDICT ({clip}, {anim_paths.METHODS[method][1]}): {len(summary['bones_changed'])} bone(s) "
+                f"edited; farthest from the bake {vs_bake['position_cm']} cm / {vs_bake['rotation_deg']} deg")
+        unreal.log(f"[AnimExport] {line}")
+        verdicts.append(line)
+        if method == "full_bake" and clip in sidecars:
+            clip_path, document = sidecars[clip]
+            report_path = clip_path.replace(".anim.json", ".final_check.json")
+            report = anim_import.check_anim_sequence(final, document, manifest, report_path,
+                                                     label=f"{clip}, exact final export")
+            report["edits"] = summary
+            report["vs_bake"] = vs_bake
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=1)
+            verdicts.append(report["verdict"])
     if not verdicts and CHECK:
         unreal.log_warning("[AnimExport] Nothing exported: build a retake sequence first "
                            "(Kotsudo > Animation > Retake method).")

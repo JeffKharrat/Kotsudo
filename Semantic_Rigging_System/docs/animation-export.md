@@ -741,19 +741,33 @@ Final export: empty layer = the bake (0.0 cm on both clips); +10° on
 `Head_FKC.Rotation.X` in the Animator layer turns `Head` 10.000° on every
 frame, only `Head`'s track rewritten, its children following.
 
-**M3, retake window** (an option on `run_anim_layers.py`:
-`RETAKE_RANGE = (start, end)`, `EASE_FRAMES`):
+**M3, retake window** (`rig_builder/anim_window.py`, `run_anim_window.py`),
+**built 2026-11-24**. `LS_<rig>_<clip>_Window` has two Control Rig tracks on
+the same binding:
 
-1. Same import and sequence as M1, plus an animation track playing the bake.
-2. The Control Rig section covers only the window plus the ease frames,
-   keyed by the M1 code on those frames only, with section ease in and out,
-   and the additive Animator layer on top.
-3. Final export: section 15's exact export, which already writes only the
-   difference the layer makes, so outside the window it equals the bake.
+1. the FK rig of M2 holding the bake on every frame (the bake, needing no
+   Maya data; an animation track would play it too but can't be baked from
+   a script, see M2);
+2. the Kotsudo rig, keyed only on the window plus the ease frames (the M1
+   code on a slice of the sidecar), its section eased in and out (manual
+   ease, set through the easing struct's text form), with the Animator
+   layer on this track over the same frames and ease.
 
-To verify first: how a Control Rig section's ease blends with the animation
-track under it in 5.6 (the base section replaces the bones, so the ease is
-what hides the rig-vs-bake gap at the edges).
+Settings: `WINDOW = (first, last)` in Maya frame numbers (None = the middle
+third), `EASE_FRAMES` (3). The final export takes the Animator layer of the
+Kotsudo track (not the FK one).
+
+Results (V010):
+
+| Clip, window | Outside (vs the bake) | Inside (the rig's own error) | Largest extra jump on the ease | Build |
+|---|---|---|---|---|
+| fk_body, 20–30, ease 3 | 0.003 cm | 0.381 cm | 0.22 cm (arm ribbon, frame 18) | 4.9 s |
+| FirstTestClip, 8–12, ease 3 | 0.012 cm | 0.385 cm | 0.013 cm | 4.3 s |
+
+Edit test (fk_body, window 20–30): +10° on `C_HeadFK_CTL.Rotation.X` in the
+Animator layer: `Head` 0° up to frame 17, 0.2° and 7.3° on the ease frames,
+10.000° on frames 20–31, back to 0° from frame 34; only `Head`'s track
+rewritten.
 
 ### The test
 
@@ -791,7 +805,7 @@ table added here.
 |---|---|---|
 | **R0** | the five V010 clips re-exported from the current Maya scene; M1 re-measured | M1 numbers on fresh clips |
 | **R1** ✅ | M2 built (2026-11-24) | E4 = the bake (0.0 cm); E1 lands (10.000°) |
-| **R2** | M3 built | E4 = the bake outside the window, within T1 inside; edges within the bake's own jumps |
+| **R2** ✅ | M3 built (2026-11-24) | outside = the bake (≤ 0.012 cm); inside the rig's own error (0.38 cm); E1 lands with the ease |
 | **R3** | `run_retake_compare.py`: the four edits through the three methods, the report | the comparison table here and in the explainer |
 
 R1 and R2 don't depend on each other and can be worked on in parallel.
@@ -811,10 +825,25 @@ Each entry opens a small options window with the settings of its
 | Animation > 1. Import baked clips... | `run_anim_import.py` | the clips' `.anim.fbx` (+ `.anim.json` for the check) |
 | Animation > 2. Retake method > M1 Full control bake... | `run_anim_layers.py` | the clips' `.anim.json`, the Kotsudo Control Rig open |
 | Animation > 2. Retake method > M2 FK layer... | `run_anim_fk_layer.py` | the imported baked clips only |
-| Animation > 2. Retake method > M3 Retake window | (not built yet) | |
-| Animation > 3. Final export... | `run_anim_export.py` | a retake sequence (M1 and/or M2) |
+| Animation > 2. Retake method > M3 Retake window... | `run_anim_window.py` | the clips' `.anim.json`, the Kotsudo Control Rig open |
+| Animation > 3. Bake retakes to Anim Sequences (optional)... | `run_anim_export.py` | a retake sequence; only to use a retake outside Sequencer |
+| Help > Tidy the Anims folder | `anim_paths.organize` | the Control Rig open |
 
 A demo by hand: open the rig's Control Rig, Kotsudo > Animation > 1, then
-2 > M2 (or M1), open `LS_<rig>_<clip>_FK` in Sequencer, key the Animator
-layer, then 3. The scripts still run on their own (File > Execute Python
-Script), with the same settings as constants at their top.
+2 > a method, open the sequence it made in Sequencer
+(`/Game/RigBuilder/Anims/<rig>/Retakes`), make the Animator layer active
+and key it. Step 3 is only for using a retake outside Sequencer. The scripts
+still run on their own (VS Code with the Unreal Python extension, or File >
+Execute Python Script), with the same settings as constants at their top.
+
+Where the assets go (`rig_builder/anim_paths.py`), one folder per rig:
+
+| Folder | Assets | Made by |
+|---|---|---|
+| `<rig>/Clips` | `A_<rig>_<clip>`: the baked clips from Maya | step 1 |
+| `<rig>/Retakes` | `LS_<rig>_<clip>_FullBake` / `_FK` / `_Window`: open these to retake | step 2 (M1 / M2 / M3) |
+| `<rig>/Rigs` | `CR_<rig>_FK`: the generated FK rig | M2, M3 |
+| `<rig>/Final` | `A_<rig>_<clip>_<method>_Final` | step 3 (optional) |
+
+The checks' bakes go to `<rig>/Temp`, deleted right after. Help > Tidy
+moved the flat layout of before 2026-11-24 into this one.
